@@ -1,0 +1,68 @@
+{
+  "code": "JP",
+  "name": "Japan",
+  "flag": "🇯🇵",
+  "locale": "ja-JP",
+  "timezones": ["Asia/Tokyo"],
+  "rtl": false,
+  "currency": {
+    "code": "JPY",
+    "symbol": "¥",
+    "minorUnits": 0,
+    "symbolPosition": "before",
+    "decimalSeparator": ".",
+    "groupSeparator": ",",
+    "groupingStyle": "standard",
+    "roundingMode": "half-up"
+  },
+  "dateFormat": "YYYY/MM/DD",
+  "timeFormat": "24h",
+  "firstDayOfWeek": 0,
+  "areaUnit": "sqm",
+  "deposit": {
+    "maxMonths": 2,
+    "interestRequired": false,
+    "interestType": "none",
+    "interestRate": null,
+    "interestReferenceRate": null,
+    "interestMargin": 0,
+    "compounding": "none",
+    "dayCountBasis": "365",
+    "beneficiary": "landlord",
+    "protectionSchemeRequired": false,
+    "protectionDeadlineDays": null,
+    "interestPermitted": true
+  },
+  "lateFee": {
+    "allowed": "yes",
+    "type": "percent",
+    "maxValue": 14.6,
+    "maxBasis": "annual_interest_cap",
+    "graceDaysDefault": 5,
+    "noticeRequiredDays": 10,
+    "contractClauseRequired": true,
+    "islamicFinanceMode": false
+  },
+  "noticePeriods": {
+    "rentIncreaseDays": 30,
+    "terminationDays": 30,
+    "depositReturnDays": 30
+  },
+  "tax": {
+    "vatOnResidentialRent": false,
+    "withholdingTaxOnRent": false,
+    "withholdingThreshold": null,
+    "propertyTaxNote": "Fixed asset tax (Kotei Shisan Zei) applies to property owners."
+  },
+  "idDocumentTypes": ["My Number Card", "Residence Card (Zairyu Card)", "Japanese Driver's License"],
+  "paymentMethods": ["Automatic Bank Transfer (Furikomi)", "Convenience Store Payment"],
+  "phonePrefix": "+81",
+  "leaseDurationMonthsDefault": 24,
+  "billingDueDayDefault": 25,
+  "legalNotes": [
+    "Shikikin (deposit) is returned minus cleaning fees upon move-out.",
+    "Standard leases renew automatically under the Act on Land and Building Leases."
+  ],
+  "version": 1,
+  "updatedAt": 1700000000000
+}

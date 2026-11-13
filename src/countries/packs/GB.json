@@ -1,0 +1,68 @@
+{
+  "code": "GB",
+  "name": "United Kingdom",
+  "flag": "🇬🇧",
+  "locale": "en-GB",
+  "timezones": ["Europe/London"],
+  "rtl": false,
+  "currency": {
+    "code": "GBP",
+    "symbol": "£",
+    "minorUnits": 2,
+    "symbolPosition": "before",
+    "decimalSeparator": ".",
+    "groupSeparator": ",",
+    "groupingStyle": "standard",
+    "roundingMode": "half-up"
+  },
+  "dateFormat": "DD/MM/YYYY",
+  "timeFormat": "24h",
+  "firstDayOfWeek": 1,
+  "areaUnit": "sqft",
+  "deposit": {
+    "maxMonths": 1.25,
+    "interestRequired": false,
+    "interestType": "none",
+    "interestRate": null,
+    "interestReferenceRate": "BOE_BASE",
+    "interestMargin": 0,
+    "compounding": "none",
+    "dayCountBasis": "365",
+    "beneficiary": "tenant",
+    "protectionSchemeRequired": true,
+    "protectionDeadlineDays": 30,
+    "interestPermitted": true
+  },
+  "lateFee": {
+    "allowed": "conditional",
+    "type": "percent",
+    "maxValue": 3,
+    "maxBasis": "annual_interest_cap",
+    "graceDaysDefault": 14,
+    "noticeRequiredDays": 0,
+    "contractClauseRequired": true,
+    "islamicFinanceMode": false
+  },
+  "noticePeriods": {
+    "rentIncreaseDays": 30,
+    "terminationDays": 60,
+    "depositReturnDays": 10
+  },
+  "tax": {
+    "vatOnResidentialRent": false,
+    "withholdingTaxOnRent": false,
+    "withholdingThreshold": null,
+    "propertyTaxNote": "Council tax is payable by tenant unless specified as HMO."
+  },
+  "idDocumentTypes": ["UK Passport", "Biometric Residence Permit", "National Insurance Number"],
+  "paymentMethods": ["BACS Direct Credit", "Faster Payments", "Standing Order"],
+  "phonePrefix": "+44",
+  "leaseDurationMonthsDefault": 12,
+  "billingDueDayDefault": 1,
+  "legalNotes": [
+    "Tenant Fees Act 2019 caps security deposits at 5 weeks rent for annual rent under £50k.",
+    "Deposit must be registered in a government-approved scheme (TDS, DPS, MyDeposits) within 30 days."
+  ],
+  "version": 1,
+  "updatedAt": 1700000000000
+}

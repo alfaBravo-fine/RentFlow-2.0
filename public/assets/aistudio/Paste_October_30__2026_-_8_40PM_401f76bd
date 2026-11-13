@@ -1,0 +1,665 @@
+# RENTFLOW — MASTER BUILD PROMPT v2.0 (Full Redesign + All Features)
+
+> Paste this entire file into Cursor, Claude Code, or Windsurf as the first message.
+> Then work through phases in order. Do not skip ahead. One phase per session.
+
+---
+
+## 1. HARD RULES (never violate)
+
+1. **Offline-first.** Every feature works with zero network. Network is used ONLY for Google sign-in, Drive sync, and opening messenger deep links.
+2. **Money is integer minor units + currency_code** on every money row. Never float. JPY=0 decimals, KWD=3, USD=2.
+3. **Invoices and payments are append-only.** Corrections via credit notes or reversal entries.
+4. **Soft-delete everything.** `deleted_at` timestamps. Never SQL DELETE on user data.
+5. **Every write** stamps `updated_at` (ms epoch) and `device_id`, and enqueues `sync_queue`.
+6. **Scheduled jobs are idempotent.** Running twice never duplicates rows.
+7. **Design tokens are law.** Section 4. No gradients, no neon, no glassmorphism, no emoji in UI, no rainbow charts.
+8. **Icons: Lucide SVG only.** Bundled locally. `currentColor`. No other icon pack.
+9. **Each user signs in with their own Google account.** One shared Client ID; per-user tokens in Stronghold.
+10. **Never upload plaintext to Drive.** AES-256-GCM with Argon2id-derived key.
+11. **Country pack defaults affect NEW records only.** Frozen `currency_code` and `pack_version` on existing rows.
+12. **Dashboard queries must use defined indexes.** No `SELECT *` on full tables.
+13. **Every record is editable.** Every list row and detail page has an Edit action; every field is editable unless it is a frozen snapshot.
+14. **Required fields block save.** Missing required field → clear error, save refused.
+15. **Every action gives visible feedback.** Toast on success, toast on error, undo where safe.
+
+---
+
+## 2. TECH STACK (locked)
+
+- **Desktop:** Tauri v2 (Rust)
+- **Frontend:** React 18 + TypeScript + Vite
+- **Styling:** Tailwind CSS + shadcn/ui (customized to tokens)
+- **Icons:** `lucide-react` (bundled, no CDN)
+- **Routing:** React Router v6
+- **State:** TanStack Query (server-state) + Zustand (client-state)
+- **DB:** SQLite via `tauri-plugin-sql`
+- **ORM:** Drizzle ORM + Drizzle Kit
+- **Validation:** Zod at every form and every IPC boundary
+- **PDF:** `@react-pdf/renderer`
+- **Excel export:** SheetJS (`xlsx`) — real XLSX, not CSV
+- **Maps:** **MapLibre GL JS** + free tiles:
+
+- Streets: OpenStreetMap (`tile.openstreetmap.org`) — free, no key
+- Satellite: Esri World Imagery (`server.arcgisonline.com/ArcGIS/rest/services/World_Imagery`) — free, no key
+- Terrain: OpenTopoMap — free, no key
+- **Encryption:** Rust `argon2` + `aes-gcm`
+- **Token store:** `tauri-plugin-stronghold`
+- **Auth:** Google OAuth 2.0 PKCE + loopback (`oauth2` crate + `tauri-plugin-oauth`)
+- **Drive:** Google Drive v3 REST (`drive.appdata` personal, `drive.file` shared)
+- **Local AI:** Ollama (`qwen2.5:7b`) for CSV import column mapper
+- **OCR:** Tesseract.js (receipts, lease PDFs)
+- **Charts:** Recharts (neutral palette, two-tone only)
+- **Testing:** Vitest + Playwright
+- **Updater:** `tauri-plugin-updater` (GitHub Releases)
+- **CI:** GitHub Actions (`tauri-action`)
+
+---
+
+## 3. PRODUCT PITCH
+
+RentFlow lets landlords and property agencies manage properties, tenants, leases, rent collection, and maintenance on their own computer — online or offline — replacing spreadsheets and paper ledgers.
+
+**Core promise:** *"Know who owes what, which units are empty, and what needs fixing, in under 10 seconds from opening the app."*
+
+**Personas:** independent landlord (1–15 units), agency manager (50–500 units), property owner (read-only recipient of statements), accountant (needs exports).
+
+**Non-goals v1:** web app, mobile app, tenant/vendor logins, online payment processing, full double-entry accounting, tax filing.
+
+---
+
+## 4. DESIGN SYSTEM — "CALM PROFESSIONAL" (locked)
+
+Aesthetic target: **Linear, Notion, Cron, Arc.** Solid surfaces, hairline borders, one accent hue, generous whitespace, tabular numbers. No gradients. No glass. No neon. No emoji in UI.
+
+### 4.1 Light mode tokens
+
+| Token | Hex |
+|---|---|
+| `--bg` | `#FFFFFF` |
+| `--surface` | `#FAFAFA` |
+| `--surface-raised` | `#FFFFFF` |
+| `--surface-sunken` | `#F5F5F5` |
+| `--border` | `#E5E5E5` |
+| `--border-strong` | `#D4D4D4` |
+| `--text` | `#0A0A0A` |
+| `--text-muted` | `#6B7280` |
+| `--text-subtle` | `#9CA3AF` |
+| `--accent` | `#2563EB` |
+| `--accent-hover` | `#1D4ED8` |
+| `--accent-subtle` | `#EFF6FF` |
+
+### 4.2 Dark mode tokens
+
+| Token ↕▾ | Hex ↕▾ |
+|---|---|
+| −`--bg` | `#0A0A0A` |
+| −`--surface` | `#141414` |
+| `--surface-raised` | `#1C1C1C` |
+| `--surface-sunken` | `#050505` |
+| `--border` | `#262626` |
+| `--border-strong` | `#3F3F3F` |
+| `--text` | `#FAFAFA` |
+| `--text-muted` | `#A1A1AA` |
+| `--text-subtle` | `#71717A` |
+| `--accent` | `#3B82F6` |
+| `--accent-hover` | `#60A5FA` |
+| `--accent-subtle` | `#172554` |
+⚙
+
+### 4.3 Status colors (badges and alerts only)
+
+| Status ↕▾ | Light fg/bg ↕▾ | Dark fg/bg ↕▾ |
+|---|---|---|
+| −Success | `#15803D` / `#F0FDF4` | `#4ADE80` / `#052E16` |
+| Warning | `#B45309` / `#FFFBEB` | `#FBBF24` / `#2C1D00` |
+| Danger | `#B91C1C` / `#FEF2F2` | `#F87171` / `#2C0A0A` |
+| Info | `#1D4ED8` / `#EFF6FF` | `#60A5FA` / `#172554` |
+⚙
+
+### 4.4 Typography
+
+- Sans: **Inter** (bundle `.woff2` locally, fallback `system-ui`)
+- Mono: **JetBrains Mono** (bundle locally, for money/dates/counts)
+- Sizes: h1 24/600, h2 20/600, h3 16/600, body 14/400, small 13/400, caption 12/500
+- **Every number** uses `font-variant-numeric: tabular-nums`
+
+### 4.5 Spacing, radius, motion
+
+- Spacing scale: 4, 8, 12, 16, 24, 32, 48, 64
+- Radius: inputs 6px, cards 8px, pills 9999px
+- Shadow (modals only): `0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(0,0,0,.06)`
+- Transition: `all 150ms cubic-bezier(.2,0,0,1)`
+- Focus: 2px solid `--accent`, 2px offset
+
+### 4.6 Forbidden
+
+Gradients. Glassmorphism. Backdrop blur. Neon. Glow. Rainbow charts. Pie charts. Emoji in UI. More than one accent hue. Animated illustrations.
+
+### 4.7 Layout system
+
+- **App shell:** fixed left sidebar (240px, collapsible to 64px), top bar (breadcrumb + search + theme toggle + user avatar), main content area (max 1200px, centered).
+- **Lists:** two-pane — list on left, detail panel on right. Never lose context.
+- **Forms:** one-column, labels above inputs, inline validation, sticky save bar.
+- **Empty states:** Lucide line icon + one sentence + one primary button. No illustrations.
+
+### 4.8 Search (command palette)
+
+- Keyboard shortcut: **Ctrl/Cmd+K**
+- Searches: tenants, properties, units, invoices, payments, maintenance, documents, settings actions.
+- Fuzzy matching, shows recents (last 10), highlights matched substring.
+- Arrow keys + Enter. Escape closes. No mouse required.
+
+### 4.9 Toast system
+
+- Bottom-right, stack of 3 max, auto-dismiss 4s (errors 8s).
+- Types: success (green border-left), error (red border-left), info (blue border-left), undo variant with action button.
+
+---
+
+## 5. FOLDER STRUCTURE
+
+```
+rentflow/
+├── README.md
+├── CONTEXT.md
+├── FEATURES.md
+├── ARCHITECTURE.md
+├── package.json
+├── tsconfig.json
+├── vite.config.ts
+├── tailwind.config.ts
+├── drizzle.config.ts
+├── .env.example
+├── design-tokens.json
+├── countries/packs/*.json
+├── messages/*.json
+├── seed/demo/
+├── src/
+│   ├── main.tsx
+│   ├── App.tsx
+│   ├── styles/globals.css
+│   ├── lib/
+│   │   ├── money.ts
+│   │   ├── interest.ts
+│   │   ├── lateFee.ts
+│   │   ├── format.ts
+│   │   ├── units.ts            (land area conversions)
+│   │   ├── validation.ts       (required-field rules)
+│   │   ├── uuid.ts
+│   │   ├── device.ts
+│   │   ├── sync.ts
+│   │   ├── crypto.ts
+│   │   ├── pdf.ts
+│   │   ├── xlsx.ts             (Excel export)
+│   │   ├── notifications.ts
+│   │   ├── deepLinks.ts        (wa.me, telegram, discord, sms, mailto, tel)
+│   │   ├── mapPersistence.ts
+│   │   └── google/
+│   │       ├── auth.ts
+│   │       └── drive.ts
+│   ├── db/
+│   │   ├── schema.ts
+│   │   ├── client.ts
+│   │   ├── migrations/
+│   │   └── seed.ts
+│   ├── countries/
+│   │   ├── types.ts
+│   │   ├── resolver.ts
+│   │   └── packs/*.json
+│   ├── features/
+│   │   ├── auth/
+│   │   ├── onboarding/
+│   │   ├── dashboard/
+│   │   ├── properties/
+│   │   ├── units/
+│   │   ├── tenants/
+│   │   ├── leases/
+│   │   ├── invoices/
+│   │   ├── payments/
+│   │   ├── deposits/
+│   │   ├── maintenance/
+│   │   ├── vendors/
+│   │   ├── expenses/
+│   │   ├── owners/
+│   │   ├── documents/
+│   │   ├── messengers/
+│   │   ├── map/
+│   │   ├── calculators/
+│   │   ├── reports/
+│   │   ├── settings/
+│   │   └── sync/
+│   ├── components/
+│   │   ├── ui/                 (shadcn customized)
+│   │   ├── layout/             (sidebar, topbar, command palette)
+│   │   ├── icons/
+│   │   ├── forms/
+│   │   ├── charts/
+│   │   ├── toast/
+│   │   └── empty-states/
+│   └── routes.tsx
+├── src-tauri/
+│   ├── Cargo.toml
+│   ├── tauri.conf.json
+│   └── src/
+│       ├── main.rs
+│       ├── auth/google.rs
+│       ├── crypto.rs
+│       ├── deep_links.rs
+│       └── commands.rs
+├── templates/
+│   ├── invoice.html
+│   ├── receipt.html
+│   ├── statement.html
+│   └── notice.html
+├── tests/
+│   ├── unit/
+│   └── e2e/
+└── .github/workflows/build.yml
+```
+
+---
+
+## 6. DATA MODEL (Drizzle + SQLite)
+
+Every table has `id TEXT PRIMARY KEY`, `updated_at INTEGER NOT NULL`, `device_id TEXT NOT NULL`, and (except join tables) `deleted_at INTEGER`.
+
+### Core tables
+
+- `organizations` (id, name, country_code, display_currency, timezone, locale, plan)
+- `users` (id, org_id, google_sub UNIQUE, email, name, picture, role, auth_provider, status, last_login_at)
+- `workspaces` (id, org_id, storage_model, drive_folder_id, drive_owner_email, encryption_salt)
+- `device_registry` (id, user_id, workspace_id, device_name, os, last_sync_at, revoked_at)
+- `owners` (id, org_id, name, payout_details, commission_type, commission_value)
+- `properties` (id, org_id, owner_id, name, address_line1, address_line2, city, region, postal_code, country_code, latitude, longitude, type, notes)
+- `units` (id, property_id, name, size, area_unit, bedrooms, bathrooms, rent_minor, currency_code, status, amenities_json)
+- `tenants` (id, org_id, name, phone, email, id_type, id_number, emergency_contact_name, emergency_contact_phone, occupants, notes_json, tags_json)
+- `leases` (id, unit_id, tenant_id, start_date, end_date, rent_minor, currency_code, country_code_snapshot, pack_version_snapshot, billing_cycle, due_day, deposit_minor, late_fee_type, late_fee_value, grace_days, status, terms_notes)
+- `invoices` (id, lease_id, period_start, period_end, due_date, subtotal_minor, late_fee_minor, total_minor, amount_paid_minor, currency_code, status, voided_reason)
+- `invoice_lines` (id, invoice_id, description, amount_minor, line_type, sort_order)
+- `payments` (id, invoice_id, amount_minor, currency_code, method, reference, paid_at, receipt_path, reversal_of_id)
+- `credits` (id, lease_id, amount_minor, currency_code, reason, applied_invoice_id)
+- `deposits` (id, lease_id, amount_minor, currency_code, received_at, status, interest_accrued_minor, returned_minor)
+- `deposit_deductions` (id, deposit_id, amount_minor, reason, evidence_path, created_at)
+- `maintenance_requests` (id, unit_id, tenant_id, category, description, urgency, status, vendor_id, cost_minor, paid_by, completed_at)
+- `maintenance_photos` (id, request_id, file_path, caption)
+- `vendors` (id, org_id, name, category, phone, email, rating, notes)
+- `expenses` (id, org_id, property_id, unit_id, category, amount_minor, currency_code, expense_date, vendor_id, receipt_path, notes)
+- `documents` (id, org_id, linked_type, linked_id, type, file_path, mime, expires_at, tags_json)
+- `rent_increases` (id, unit_id, old_amount_minor, new_amount_minor, effective_date, reason, user_id, created_at)
+- `notifications` (id, user_id, channel, template_key, status, scheduled_at, attempts, sent_at)
+- `reminders` (id, lease_id, type, channel, scheduled_at, attempts, status)
+- `audit_log` (id, org_id, user_id, action, entity_type, entity_id, before_json, after_json, created_at)
+- `sync_queue` (id INTEGER PK AUTOINCREMENT, table_name, record_id, op, payload_json, synced, file_id, created_at)
+- `country_packs` (code TEXT PK, version, payload_json, updated_at)
+- `reference_rates` (id, name, effective_date, rate, source, UNIQUE(name, effective_date))
+- `fx_rates` (id, from_code, to_code, effective_date, rate, source, UNIQUE(from_code, to_code, effective_date))
+- `app_meta` (key TEXT PK, value TEXT)
+- `map_state` (id, user_id, center_lat, center_lng, zoom, layer, saved_at) — **for map persistence**
+
+### Required indexes
+
+```
+CREATE INDEX idx_invoices_lease_status_due ON invoices(lease_id, status, due_date);
+CREATE INDEX idx_invoices_status_due        ON invoices(status, due_date);
+CREATE INDEX idx_payments_invoice_date      ON payments(invoice_id, paid_at);
+CREATE INDEX idx_leases_unit_status         ON leases(unit_id, status);
+CREATE INDEX idx_leases_end_date            ON leases(end_date) WHERE status = 'active';
+CREATE INDEX idx_maintenance_unit_status    ON maintenance_requests(unit_id, status);
+CREATE INDEX idx_expenses_property_date     ON expenses(property_id, expense_date);
+CREATE INDEX idx_sync_queue_pending         ON sync_queue(synced, created_at);
+CREATE INDEX idx_rent_increases_unit        ON rent_increases(unit_id, effective_date);
+CREATE INDEX idx_map_state_user             ON map_state(user_id);
+```
+
+---
+
+## 7. COUNTRY PACK SYSTEM — FULLY WORKING (bug fix)
+
+### 7.1 Zod schema (`src/countries/types.ts`)
+
+```
+export const CountryPack = z.object({
+  code: z.string().length(2),
+  name: z.string(),
+  flag: z.string(),                        // emoji allowed here (flag only)
+  locale: z.string(),
+  timezones: z.array(z.string()),
+  rtl: z.boolean().default(false),
+  currency: z.object({
+    code: z.string().length(3),
+    symbol: z.string(),
+    minorUnits: z.number().int().min(0).max(3),
+    symbolPosition: z.enum(['prefix', 'suffix']),
+    decimalSeparator: z.string(),
+    groupSeparator: z.string(),
+    groupingStyle: z.enum(['western', 'indian']).default('western'),
+    roundingMode: z.enum(['half-up', 'half-even', 'floor']).default('half-up'),
+  }),
+  dateFormat: z.string(),
+  timeFormat: z.enum(['12h', '24h']),
+  firstDayOfWeek: z.number().min(0).max(6),
+  areaUnit: z.enum(['sqm', 'sqft']),
+  deposit: z.object({
+    maxMonths: z.number().nullable(),
+    interestRequired: z.boolean(),
+    interestType: z.enum(['none', 'simple', 'compound']).default('none'),
+    interestRate: z.number().nullable(),
+    interestReferenceRate: z.enum(['none','boe_base','ecb_mref','sbp_policy','uae_cbuae','rbi_repo','rba_cash']).default('none'),
+    interestMargin: z.number().default(0),
+    compounding: z.enum(['annual','monthly','daily']).default('annual'),
+    dayCountBasis: z.enum(['365','360','actual']).default('actual'),
+    beneficiary: z.enum(['landlord','tenant','split']).default('tenant'),
+    protectionSchemeRequired: z.boolean().default(false),
+    protectionDeadlineDays: z.number().nullable().default(null),
+    interestPermitted: z.boolean().default(true),
+  }),
+  lateFee: z.object({
+    allowed: z.enum(['yes','contract_only','no']),
+    type: z.enum(['percent','flat','none']).default('percent'),
+    maxValue: z.number().nullable(),
+    maxBasis: z.enum(['monthly_rent','outstanding_balance']).default('outstanding_balance'),
+    graceDaysDefault: z.number().default(5),
+    noticeRequiredDays: z.number().nullable().default(null),
+    contractClauseRequired: z.boolean().default(false),
+    islamicFinanceMode: z.boolean().default(false),
+  }),
+  noticePeriods: z.object({
+    rentIncreaseDays: z.number().nullable(),
+    terminationDays: z.number().nullable(),
+    depositReturnDays: z.number().nullable(),
+  }),
+  tax: z.object({
+    vatOnResidentialRent: z.number().default(0),
+    withholdingTaxOnRent: z.number().default(0),
+    withholdingThreshold: z.number().nullable().default(null),
+    propertyTaxNote: z.string().nullable().default(null),
+  }),
+  idDocumentTypes: z.array(z.string()),
+  paymentMethods: z.array(z.string()),
+  phonePrefix: z.string(),
+  leaseDurationMonthsDefault: z.number().default(12),
+  billingDueDayDefault: z.number().min(1).max(28).default(1),
+  legalNotes: z.array(z.string()).default([]),
+  version: z.number().int(),
+  updatedAt: z.string(),
+});
+export type CountryPack = z.infer<typeof CountryPack>;
+```
+
+### 7.2 Ship 9 packs
+
+`US, GB, DE, AU, IN, PK, AE, JP, KW` — with correct `minorUnits` (JP 0, KW 3), correct `locale` (IN uses `en-IN`), correct Islamic mode flags (PK, AE, KW), correct reference rate names, correct deposit caps.
+
+### 7.3 ⚠️ The country-pack bug — root cause and fix
+
+**Root cause of "stuck on US"** — three classes of failure to prevent:
+
+1. **Zustand store not re-hydrating.** The pack was read once on app start and never re-read after change. **Fix:** subscribe to `org.country_code` in Zustand; every consumer reads `usePack()` hook; hook recomputes whenever `org.country_code` OR `country_packs` version changes. Never cache pack in a React state that doesn't depend on the org.
+2. **Intl caching.** `Intl.NumberFormat(locale)` instances cached by locale string — if you memoized with wrong deps, stale formatting persists. **Fix:** memoize with `[pack.code, pack.version]` in dependency array.
+3. **DB write succeeds but UI reads from stale TanStack Query cache.** **Fix:** on country change, call `queryClient.invalidateQueries()` for all keys with prefix `pack` and `org`.
+
+**Verification test (must pass in CI):** switch country from US → PK → GB → JP → US; after each switch, the dashboard currency symbol, date format, deposit rules shown, and late fee fields must change. Add this as a Playwright test.
+
+### 7.4 Resolver
+
+`resolvePack(entity)` walks: org → property → lease → frozen invoice/payment. Frozen invoice/payment currency is never overwritten.
+
+### 7.5 Currency migration (danger zone)
+
+Settings → "Migrate organization currency" requires: typed phrase, FX rate entry, backup created, audit log row, only OPEN balances converted. Paid rows keep original currency with "settled in X" tag.
+
+---
+
+## 8. MONEY, INTEREST, LATE FEE, UNITS
+
+### 8.1 `src/lib/money.ts`
+
+`toMinor`, `toMajor`, `formatMoney` (Intl + tabular), `convertMinor`, `roundMinor` (half-up). Handles INR grouping, JPY 0, KWD 3, RTL `<bdi>`.
+
+### 8.2 `src/lib/interest.ts`
+
+`accrueDepositInterest({principalMinor, pack, from, to, referenceRates})` — returns 0 if not permitted or type none; supports simple/compound; dayCountBasis 365/360/actual.
+
+### 8.3 `src/lib/lateFee.ts`
+
+`computeLateFee(invoice, lease, pack, today)` — honors `allowed='no'`, grace days, legal cap, Islamic charity flag.
+
+### 8.4 `src/lib/units.ts` — Land Area Calculator
+
+Supported units and conversion factors to square meters:
+
+```
+sqm: 1
+sqft: 0.092903
+sqyd: 0.836127
+marla_pk: 25.2929    (Punjab standard: 272.25 sqft)
+marla_in: 25.2929    (same as Pakistan for most states)
+kanal_pk: 505.857    (20 marla)
+kanal_in: 505.857
+acre: 4046.86
+hectare: 10000
+bigha_up: 2529.29    (UP standard, 1/5 acre)
+bigha_bd: 1337.8
+```
+
+`convertArea(value, fromUnit, toUnit)` returns rounded to 2 decimals. Test all conversions in unit tests.
+
+---
+
+## 9. AUTH — MULTI-USER GOOGLE (PKCE + LOOPBACK)
+
+Same flow as before: Rust generates verifier, opens system browser, loopback listener on `127.0.0.1:PORT`, exchanges code, stores tokens in Stronghold, returns `{sub, email, name, picture}` to frontend.
+
+Scopes:
+
+- Personal: `openid email profile drive.appdata`
+- Shared: `openid email profile drive.file`
+
+`users.google_sub` is the stable ID. Never key on email. Sign-out revokes token via `POST /revoke` and clears Stronghold.
+
+**PIN lock:** optional 4–6 digit PIN gates app on launch. Auto-lock after 5 min idle (configurable).
+
+---
+
+## 10. DRIVE SYNC — ENCRYPTED, OFFLINE-TOLERANT
+
+Same layout as before:
+
+```
+manifest.json.enc
+devices/<device-uuid>.json.enc
+changes/<device-uuid>/000001.json.enc
+snapshots/2026-10-29T18-30-00Z.sqlite.enc
+meta.json.enc
+```
+
+Argon2id (t=3, m=64MB, p=4) → 32B master → HKDF per file → AES-256-GCM. Never upload plaintext.
+
+**Sync engine:** runs on open + every 30s focused + on write (debounced 2s). Push batches of 500, pull remote changes, merge with last-write-wins except payments/invoices which are append-only (conflict screen for edits to totals). Snapshots rotate 7 daily / 4 weekly.
+
+**Offline matrix:** all app features work offline; only sign-in, sync, and messenger deep links need network. Status indicator in top bar.
+
+---
+
+## 11. ALL FEATURES — FULL INVENTORY
+
+### 11.1 Authentication & Accounts
+
+- Google OAuth PKCE (per-user accounts)
+- Optional PIN lock + auto-lock
+- Organization creation on signup
+- Roles: Admin, Manager, Accountant, Staff, Owner (read-only)
+- Multi-user local accounts (separate PINs on one machine)
+- Invite staff by email link (v1.5)
+- Audit log of every action
+- Session timeout + re-auth for sensitive actions
+- Sign-out revokes token + clears Stronghold
+
+### 11.2 Onboarding
+
+- Country picker with live preview card (currency, date format, deposit rules shown updating)
+- Add first property + unit wizard
+- Optional demo data toggle
+- Progressive checklist (v1.5)
+
+### 11.3 Properties & Units
+
+- Full CRUD with **required fields:** name, address_line1, city, country_code, type
+- Property types: apartment, house, commercial, land
+- Units: name, size, area unit (from country pack), beds, baths, rent, amenities
+- Unit status: vacant / occupied / under maintenance
+- Property dashboard: occupancy, expected rent, collected, arrears
+- Assign property to owner
+- Bulk import from CSV/Excel (AI column mapper)
+- Bulk rent increase (% or flat) with history
+- **Rent increase history** — timeline per unit with old amount, new amount, effective date, reason, who
+- Property photo gallery
+- Archive (soft-delete) with history preserved
+- Map pin per property (lat/lng captured from MapLibre)
+
+### 11.4 Tenants
+
+- Full CRUD with **required fields:** name, phone, id_type, id_number
+- Emergency contact (name + phone)
+- Occupants count
+- Link tenant → unit → lease
+- Tenant history (current + past, never deleted)
+- Documents (ID, employment letter, lease PDFs)
+- Notes and tags
+- Co-tenants and guarantors (v1.5)
+- **One-click contact actions:** copy phone, open WhatsApp, open SMS, open phone call, open email — all with tenant name pre-filled
+- Merge duplicate tenants (v1.5)
+- Tenant statement PDF export
+
+### 11.5 Leases
+
+- Full CRUD with **required fields:** start_date, end_date, rent_minor, billing_cycle, due_day, deposit_minor
+- Country snapshot + pack version snapshot on creation (frozen)
+- Attach signed lease PDF
+- Status machine: draft → active → expiring → expired / terminated
+- Expiry alerts at 90, 60, 30 days
+- One active lease per unit enforced
+- Renewal flow with rent increase proposal (v1.5)
+- Lease templates (v1.5)
+- E-signature in-app (v1.5)
+- Move-in / move-out checklists with photos (v1.5)
+- Early termination with penalty calculation (v1.5)
+- Amendment log
+
+### 11.6 Rent & Billing
+
+- Auto invoice generation per cycle (idempotent)
+- Billing cycles: monthly, quarterly, yearly
+- Due-day clamping (31 → 28 in Feb)
+- Line items per invoice (rent, utilities, parking, late fee, custom)
+- Partial payments with running balance
+- **FIFO payment allocation** across open invoices
+- Overpayment → credit on lease
+- Late fee with legal cap + grace + Islamic mode
+- Rent roll view
+- Arrears aging (0–30 / 31–60 / 60+)
+- Deposit tracking (held / deducted / refunded)
+- **Deposit deduction ledger** — itemized line per deduction with reason and photo
+- Deposit interest accrual
+- Invoice void with reason (never hard-delete)
+- Credit notes
+- Rent-free periods / discounts
+
+### 11.7 Payments
+
+- Manual entry: cash, bank, cheque, wallet, card
+- Payment date, method, reference
+- Append-only (no editing history)
+- Reversal entries (not delete)
+- Attach bank slip / cheque photo
+- Receipt PDF auto-generated + sent via deep link
+- Bank statement CSV import with smart matching (v1.5)
+- Multi-currency payment recording
+
+### 11.8 Maintenance
+
+- Full CRUD on requests and columns
+- Kanban board: New → Assigned → In Progress → Completed → Closed
+- **Direct action buttons on each card:** Assign, Start Progress, Mark Complete, Delete — no generic "Advance" button
+- Category, description, urgency (low/normal/high/emergency)
+- Photos per request
+- Assign to vendor
+- Comments thread
+- Record cost + who pays (landlord/tenant)
+- Link cost to expense ledger
+- Photo proof of completion
+- Reopen closed request
+- SLA timer
+- Tenant satisfaction rating after close (v1.5)
+- Preventive maintenance schedules (v2)
+
+### 11.9 Vendors
+
+- Directory: name, category, contact, rating, notes
+- Assign jobs
+- Vendor invoice upload
+- **Shared vendor cost history** — total spent across all properties, average job cost, last job date
+
+### 11.10 Expenses
+
+- Log with property/unit, category, amount, date, vendor, receipt photo
+- Receipt OCR auto-fill (Tesseract.js)
+- Recurring expense templates (insurance, tax, mortgage)
+- Income vs. expense per property per month
+- Category configurable
+
+### 11.11 Owner Statements (Agency)
+
+- Owner statement PDF: rent collected, fees, expenses, net payout
+- Multi-owner portfolio
+- Agency commission rules (% or flat) with auto-calculation
+- Owner payout tracking
+- Read-only HTML export of owner portfolio (v1.5)
+
+### 11.12 Documents
+
+- Upload to any entity
+- Tag and search
+- Folders (v1.5)
+- **Document expiry reminders** — insurance, license, fire cert → alerts at 90, 60, 30 days
+- Full-text search inside PDFs (OCR + FTS5)
+- Drag-and-drop upload
+- In-app preview
+- Bulk download ZIP
+
+### 11.13 Messengers Hub — NEW (deep links, not iframes)
+
+**Why this changed:** WhatsApp, Telegram, and Discord **block embedding** in iframes (the "Refused to Connect" error). This is permanent and unfixable — it's their security policy. **Do not use iframes. Use deep links.**
+
+**What the Messenger tab does:**
+
+- Clean header with three tabs: WhatsApp, Telegram, Discord.
+- Each tab shows a clean card: platform icon, "Open WhatsApp Desktop" button, "Open WhatsApp Web" button.
+- Clicking **Open Desktop** uses Tauri's `opener::open_url('whatsapp://')` — launches the native app if installed.
+- Clicking **Open Web** opens the default browser to `web.whatsapp.com` (or the equivalent) — never inside the app.
+- Same for Telegram (`tg://` / `web.telegram.org/a/`) and Discord (`discord://` / `discord.com/app`).
+- Above the cards, a **Quick Send** box: pick tenant from a dropdown, pick template, and the app generates the deep link with the message pre-filled:
+
+- WhatsApp: `https://wa.me/<phone>?text=<encoded message>`
+- SMS: `sms:<phone>?body=<encoded message>`
+- Email: `mailto:<email>?subject=...&body=...`
+- The quick-send box works while offline (generates the link) but opening the link requires network for WhatsApp Web. If offline, show a soft toast: "Message link copied — open when online."
+- If the native app isn't installed, `opener::open_url` fails gracefully → fall back to browser URL.
+
+### 11.14 Map — MapLibre GL + satellite + persistence
+
+**Why MapLibre:** real streets, real buildings, satellite imagery, terrain — all free with no API keys.
+
+**Layers available (tab switcher):**
+
+- **Streets** — OpenStreetMap raster tiles (`https://tile.openstreetmap.org/{z}/{x}/{y}.png`)
+- **Satellite** — Esri World Imagery (`https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}`)
+- **Terrain** — OpenTopoMap (`https://a.tile.opentopomap.org/{z}/{x}/{y}.png`)
+
+**Features:**
+
+- Property pins from lat/lng stored on each property
+- Click pin → info card with property name, address, "Copy address", "Copy coordinates", "Open in system maps"
+- Click empty map area → "Add property here" flow (pre-fills lat/lng)
+- Search box: type city/region → fly to that location (uses free Nominatim search — no key)

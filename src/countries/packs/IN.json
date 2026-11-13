@@ -1,0 +1,68 @@
+{
+  "code": "IN",
+  "name": "India",
+  "flag": "🇮🇳",
+  "locale": "en-IN",
+  "timezones": ["Asia/Kolkata"],
+  "rtl": false,
+  "currency": {
+    "code": "INR",
+    "symbol": "₹",
+    "minorUnits": 2,
+    "symbolPosition": "before",
+    "decimalSeparator": ".",
+    "groupSeparator": ",",
+    "groupingStyle": "indian",
+    "roundingMode": "half-up"
+  },
+  "dateFormat": "DD/MM/YYYY",
+  "timeFormat": "12h",
+  "firstDayOfWeek": 0,
+  "areaUnit": "sqft",
+  "deposit": {
+    "maxMonths": 6,
+    "interestRequired": false,
+    "interestType": "none",
+    "interestRate": null,
+    "interestReferenceRate": null,
+    "interestMargin": 0,
+    "compounding": "none",
+    "dayCountBasis": "365",
+    "beneficiary": "landlord",
+    "protectionSchemeRequired": false,
+    "protectionDeadlineDays": null,
+    "interestPermitted": true
+  },
+  "lateFee": {
+    "allowed": "yes",
+    "type": "percent",
+    "maxValue": 18,
+    "maxBasis": "annual_interest_cap",
+    "graceDaysDefault": 7,
+    "noticeRequiredDays": 7,
+    "contractClauseRequired": true,
+    "islamicFinanceMode": false
+  },
+  "noticePeriods": {
+    "rentIncreaseDays": 30,
+    "terminationDays": 30,
+    "depositReturnDays": 30
+  },
+  "tax": {
+    "vatOnResidentialRent": false,
+    "withholdingTaxOnRent": true,
+    "withholdingThreshold": 240000,
+    "propertyTaxNote": "TDS of 10% under Section 194I applies if annual rent exceeds ₹2,40,000."
+  },
+  "idDocumentTypes": ["Aadhaar Card", "PAN Card", "Indian Passport", "Voter ID"],
+  "paymentMethods": ["UPI", "NEFT / RTGS / IMPS", "Cheque", "Net Banking"],
+  "phonePrefix": "+91",
+  "leaseDurationMonthsDefault": 11,
+  "billingDueDayDefault": 5,
+  "legalNotes": [
+    "Leases of 11 months avoid mandatory stamp duty registration in many states.",
+    "TDS deduction rules apply under Income Tax Act Section 194I / 194IB."
+  ],
+  "version": 1,
+  "updatedAt": 1700000000000
+}

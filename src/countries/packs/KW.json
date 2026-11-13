@@ -1,0 +1,68 @@
+{
+  "code": "KW",
+  "name": "Kuwait",
+  "flag": "🇰🇼",
+  "locale": "en-KW",
+  "timezones": ["Asia/Kuwait"],
+  "rtl": true,
+  "currency": {
+    "code": "KWD",
+    "symbol": "KWD",
+    "minorUnits": 3,
+    "symbolPosition": "before",
+    "decimalSeparator": ".",
+    "groupSeparator": ",",
+    "groupingStyle": "standard",
+    "roundingMode": "half-up"
+  },
+  "dateFormat": "DD/MM/YYYY",
+  "timeFormat": "12h",
+  "firstDayOfWeek": 6,
+  "areaUnit": "sqm",
+  "deposit": {
+    "maxMonths": 1,
+    "interestRequired": false,
+    "interestType": "none",
+    "interestRate": null,
+    "interestReferenceRate": null,
+    "interestMargin": 0,
+    "compounding": "none",
+    "dayCountBasis": "365",
+    "beneficiary": "landlord",
+    "protectionSchemeRequired": false,
+    "protectionDeadlineDays": null,
+    "interestPermitted": false
+  },
+  "lateFee": {
+    "allowed": "conditional",
+    "type": "flat",
+    "maxValue": 50,
+    "maxBasis": "fixed_amount",
+    "graceDaysDefault": 20,
+    "noticeRequiredDays": 15,
+    "contractClauseRequired": true,
+    "islamicFinanceMode": true
+  },
+  "noticePeriods": {
+    "rentIncreaseDays": 90,
+    "terminationDays": 90,
+    "depositReturnDays": 15
+  },
+  "tax": {
+    "vatOnResidentialRent": false,
+    "withholdingTaxOnRent": false,
+    "withholdingThreshold": null,
+    "propertyTaxNote": "No personal income or VAT on residential rent."
+  },
+  "idDocumentTypes": ["Civil ID", "Passport with Residency Visa"],
+  "paymentMethods": ["K-Net Online Payment", "Bank Transfer", "Cheque"],
+  "phonePrefix": "+965",
+  "leaseDurationMonthsDefault": 12,
+  "billingDueDayDefault": 1,
+  "legalNotes": [
+    "Kuwait Tenancy Law No. 35/1978 governs tenancy disputes and eviction procedures.",
+    "Late fee payments under Islamic principles must be allocated to approved charitable distributions."
+  ],
+  "version": 1,
+  "updatedAt": 1700000000000
+}

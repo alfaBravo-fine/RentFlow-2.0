@@ -1,0 +1,65 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/tooling/cli/schema.json",
+  "productName": "RentFlow",
+  "version": "2.0.0",
+  "identifier": "com.rentflow.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:3000",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.tile.openstreetmap.org https://server.arcgisonline.com https://*.tile.opentopomap.org https://*.googleusercontent.com https:; connect-src 'self' https://www.googleapis.com https://accounts.google.com https://oauth2.googleapis.com https://*.tile.openstreetmap.org https://server.arcgisonline.com https://*.tile.opentopomap.org"
+    },
+    "windows": [
+      {
+        "title": "RentFlow — Desktop Property & Rental Management",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 1024,
+        "minHeight": 700,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "decorations": true,
+        "transparent": false
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "category": "Business",
+    "copyright": "Copyright 2026 RentFlow",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "identifier": "com.rentflow.app",
+    "shortDescription": "Offline-First Desktop Property Management",
+    "longDescription": "Production-ready offline-first desktop rental property management system powered by Tauri v2, SQLite, and encrypted Google Drive backup.",
+    "windows": {
+      "nsis": {
+        "oneClick": false,
+        "perMachine": false,
+        "allowToChangeInstallationDirectory": true,
+        "createDesktopShortcut": true,
+        "createStartMenuShortcut": true,
+        "shortcutName": "RentFlow"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/rentflow/rentflow-desktop/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJDNjYyNTMwQzk3QjUyOUEKUldUUUhOeVg2Yy9Xcm9xRFhXRFZZV1g5MDRyMmRCSWhJbEgvQ2Y1N0R0cndXRFZYNkR3OWU2N08="
+    }
+  }
+}

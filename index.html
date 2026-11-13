@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RentFlow - Property & Rental Management</title>
+    <link rel="icon" type="image/svg+xml" href="./icon.svg" />
+    <meta name="description" content="Offline-first property and rental management software for landlords and property agencies." />
+    <meta property="og:title" content="RentFlow - Property & Rental Management" />
+    <meta property="og:description" content="Offline-first property and rental management software for landlords and property agencies." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <script>
+      (function() {
+        // Isolate third-party browser extension content-script errors/timeouts (e.g. "Window message 'chrome: call method' timed out")
+        // so extension RPC rejections inside preview iframes do not surface as application errors.
+        function isExtensionOrigin(str) {
+          return typeof str === 'string' && (
+            str.indexOf('chrome-extension://') !== -1 ||
+            str.indexOf('moz-extension://') !== -1 ||
+            str.indexOf('safari-extension://') !== -1
+          );
+        }
+
+        window.addEventListener('unhandledrejection', function(event) {
+          try {
+            var reason = event && event.reason;
+            var stack = reason && reason.stack ? String(reason.stack) : '';
+            var msg = reason && reason.message ? String(reason.message) : String(reason || '');
+            if (isExtensionOrigin(stack) || isExtensionOrigin(msg) || msg.indexOf('chrome: call method') !== -1) {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+            }
+          } catch (e) {}
+        }, true);
+
+        window.addEventListener('error', function(event) {
+          try {
+            var filename = event && event.filename ? String(event.filename) : '';
+            var msg = event && event.message ? String(event.message) : '';
+            var stack = event && event.error && event.error.stack ? String(event.error.stack) : '';
+            if (isExtensionOrigin(filename) || isExtensionOrigin(stack) || msg.indexOf('chrome: call method') !== -1) {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+            }
+          } catch (e) {}
+        }, true);
+
+        try {
+          var raw = localStorage.getItem('rentflow-theme') || localStorage.getItem('rentflow_theme_config') || localStorage.getItem('rentflow_theme');
+          var mode = 'light';
+          var palette = 'classic';
+          if (raw) {
+            if (raw.indexOf('{') === 0) {
+              var parsed = JSON.parse(raw);
+              if (parsed && parsed.mode) mode = parsed.mode;
+              if (parsed && parsed.colorPalette) palette = parsed.colorPalette;
+            } else if (raw === 'dark') {
+              mode = 'dark';
+              palette = 'midnight';
+            }
+          } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            mode = 'dark';
+            palette = 'midnight';
+          }
+          if (mode === 'dark') {
+            document.documentElement.classList.add('dark');
+          } else {
+            document.documentElement.classList.remove('dark');
+          }
+          document.documentElement.setAttribute('data-theme', palette);
+          document.documentElement.setAttribute('data-mode', mode);
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

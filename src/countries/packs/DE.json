@@ -1,0 +1,68 @@
+{
+  "code": "DE",
+  "name": "Germany",
+  "flag": "🇩🇪",
+  "locale": "de-DE",
+  "timezones": ["Europe/Berlin"],
+  "rtl": false,
+  "currency": {
+    "code": "EUR",
+    "symbol": "€",
+    "minorUnits": 2,
+    "symbolPosition": "after",
+    "decimalSeparator": ",",
+    "groupSeparator": ".",
+    "groupingStyle": "standard",
+    "roundingMode": "half-up"
+  },
+  "dateFormat": "DD.MM.YYYY",
+  "timeFormat": "24h",
+  "firstDayOfWeek": 1,
+  "areaUnit": "sqm",
+  "deposit": {
+    "maxMonths": 3,
+    "interestRequired": true,
+    "interestType": "reference-rate",
+    "interestRate": null,
+    "interestReferenceRate": "ECB_MAIN",
+    "interestMargin": 0,
+    "compounding": "annual",
+    "dayCountBasis": "365",
+    "beneficiary": "tenant",
+    "protectionSchemeRequired": true,
+    "protectionDeadlineDays": 30,
+    "interestPermitted": true
+  },
+  "lateFee": {
+    "allowed": "yes",
+    "type": "percent",
+    "maxValue": 5,
+    "maxBasis": "annual_interest_cap",
+    "graceDaysDefault": 3,
+    "noticeRequiredDays": 14,
+    "contractClauseRequired": true,
+    "islamicFinanceMode": false
+  },
+  "noticePeriods": {
+    "rentIncreaseDays": 90,
+    "terminationDays": 90,
+    "depositReturnDays": 180
+  },
+  "tax": {
+    "vatOnResidentialRent": false,
+    "withholdingTaxOnRent": false,
+    "withholdingThreshold": null,
+    "propertyTaxNote": "Grundsteuer is apportioned via annual Nebenkostenabrechnung."
+  },
+  "idDocumentTypes": ["Personalausweis", "Reisepass", "Meldebestätigung"],
+  "paymentMethods": ["SEPA Direct Debit", "SEPA Credit Transfer"],
+  "phonePrefix": "+49",
+  "leaseDurationMonthsDefault": 12,
+  "billingDueDayDefault": 3,
+  "legalNotes": [
+    "Security deposit (Mietkaution) capped at 3 net cold months rent (BGB §551).",
+    "Deposit must be kept separate from landlord funds and bear statutory savings interest for tenant."
+  ],
+  "version": 1,
+  "updatedAt": 1700000000000
+}

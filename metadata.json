@@ -1,0 +1,6 @@
+{
+  "name": "RentFlow - Property & Rental Management",
+  "description": "Offline-first property and rental management software for landlords and property agencies.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

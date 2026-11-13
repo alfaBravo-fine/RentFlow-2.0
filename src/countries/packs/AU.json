@@ -1,0 +1,68 @@
+{
+  "code": "AU",
+  "name": "Australia",
+  "flag": "🇦🇺",
+  "locale": "en-AU",
+  "timezones": ["Australia/Sydney", "Australia/Melbourne", "Australia/Perth"],
+  "rtl": false,
+  "currency": {
+    "code": "AUD",
+    "symbol": "$",
+    "minorUnits": 2,
+    "symbolPosition": "before",
+    "decimalSeparator": ".",
+    "groupSeparator": ",",
+    "groupingStyle": "standard",
+    "roundingMode": "half-up"
+  },
+  "dateFormat": "DD/MM/YYYY",
+  "timeFormat": "12h",
+  "firstDayOfWeek": 1,
+  "areaUnit": "sqm",
+  "deposit": {
+    "maxMonths": 1,
+    "interestRequired": false,
+    "interestType": "none",
+    "interestRate": null,
+    "interestReferenceRate": null,
+    "interestMargin": 0,
+    "compounding": "none",
+    "dayCountBasis": "365",
+    "beneficiary": "tenant",
+    "protectionSchemeRequired": true,
+    "protectionDeadlineDays": 14,
+    "interestPermitted": false
+  },
+  "lateFee": {
+    "allowed": "no",
+    "type": "none",
+    "maxValue": 0,
+    "maxBasis": "none",
+    "graceDaysDefault": 14,
+    "noticeRequiredDays": 14,
+    "contractClauseRequired": false,
+    "islamicFinanceMode": false
+  },
+  "noticePeriods": {
+    "rentIncreaseDays": 60,
+    "terminationDays": 30,
+    "depositReturnDays": 14
+  },
+  "tax": {
+    "vatOnResidentialRent": false,
+    "withholdingTaxOnRent": false,
+    "withholdingThreshold": null,
+    "propertyTaxNote": "Council rates and land tax are landlord responsibility."
+  },
+  "idDocumentTypes": ["Driver Licence", "Australian Passport", "Medicare Card"],
+  "paymentMethods": ["EFT Direct Deposit", "BPAY", "Direct Debit"],
+  "phonePrefix": "+61",
+  "leaseDurationMonthsDefault": 12,
+  "billingDueDayDefault": 1,
+  "legalNotes": [
+    "Rental bond must be lodged with state authority (e.g., NSW Fair Trading, RTBA).",
+    "Late fees are generally prohibited under residential tenancy law in most states."
+  ],
+  "version": 1,
+  "updatedAt": 1700000000000
+}

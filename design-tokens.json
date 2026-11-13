@@ -1,0 +1,51 @@
+{
+  "colors": {
+    "light": {
+      "bg": "#FFFFFF",
+      "surface": "#FAFAFA",
+      "surfaceRaised": "#FFFFFF",
+      "border": "#E5E5E5",
+      "borderStrong": "#D4D4D4",
+      "text": "#0A0A0A",
+      "textMuted": "#6B7280",
+      "textSubtle": "#9CA3AF",
+      "accent": "#2563EB",
+      "accentHover": "#1D4ED8",
+      "accentSubtle": "#EFF6FF",
+      "status": {
+        "success": { "fg": "#15803D", "bg": "#F0FDF4" },
+        "warning": { "fg": "#B45309", "bg": "#FFFBEB" },
+        "danger": { "fg": "#B91C1C", "bg": "#FEF2F2" },
+        "info": { "fg": "#1D4ED8", "bg": "#EFF6FF" }
+      }
+    },
+    "dark": {
+      "bg": "#0A0A0A",
+      "surface": "#141414",
+      "surfaceRaised": "#1C1C1C",
+      "border": "#262626",
+      "borderStrong": "#3F3F3F",
+      "text": "#FAFAFA",
+      "textMuted": "#A1A1AA",
+      "textSubtle": "#71717A",
+      "accent": "#3B82F6",
+      "accentHover": "#60A5FA",
+      "accentSubtle": "#172554",
+      "status": {
+        "success": { "fg": "#4ADE80", "bg": "#052E16" },
+        "warning": { "fg": "#FBBF24", "bg": "#2C1D00" },
+        "danger": { "fg": "#F87171", "bg": "#2C0A0A" },
+        "info": { "fg": "#60A5FA", "bg": "#172554" }
+      }
+    }
+  },
+  "typography": {
+    "fontSans": "Inter, system-ui, -apple-system, sans-serif",
+    "fontMono": "JetBrains Mono, ui-monospace, SFMono-Regular, monospace"
+  },
+  "radii": {
+    "input": "6px",
+    "card": "8px",
+    "pill": "9999px"
+  }
+}

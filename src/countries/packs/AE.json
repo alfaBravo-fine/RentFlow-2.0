@@ -1,0 +1,68 @@
+{
+  "code": "AE",
+  "name": "United Arab Emirates",
+  "flag": "🇦🇪",
+  "locale": "en-AE",
+  "timezones": ["Asia/Dubai"],
+  "rtl": false,
+  "currency": {
+    "code": "AED",
+    "symbol": "AED",
+    "minorUnits": 2,
+    "symbolPosition": "before",
+    "decimalSeparator": ".",
+    "groupSeparator": ",",
+    "groupingStyle": "standard",
+    "roundingMode": "half-up"
+  },
+  "dateFormat": "DD/MM/YYYY",
+  "timeFormat": "12h",
+  "firstDayOfWeek": 1,
+  "areaUnit": "sqm",
+  "deposit": {
+    "maxMonths": 1,
+    "interestRequired": false,
+    "interestType": "none",
+    "interestRate": null,
+    "interestReferenceRate": null,
+    "interestMargin": 0,
+    "compounding": "none",
+    "dayCountBasis": "365",
+    "beneficiary": "landlord",
+    "protectionSchemeRequired": false,
+    "protectionDeadlineDays": null,
+    "interestPermitted": false
+  },
+  "lateFee": {
+    "allowed": "yes",
+    "type": "flat",
+    "maxValue": 1000,
+    "maxBasis": "fixed_amount",
+    "graceDaysDefault": 7,
+    "noticeRequiredDays": 15,
+    "contractClauseRequired": true,
+    "islamicFinanceMode": true
+  },
+  "noticePeriods": {
+    "rentIncreaseDays": 90,
+    "terminationDays": 365,
+    "depositReturnDays": 30
+  },
+  "tax": {
+    "vatOnResidentialRent": false,
+    "withholdingTaxOnRent": false,
+    "withholdingThreshold": null,
+    "propertyTaxNote": "5% Municipality fee collected via DEWA utility billing."
+  },
+  "idDocumentTypes": ["Emirates ID", "UAE Residence Visa", "Passport"],
+  "paymentMethods": ["Post-Dated Cheques (PDC)", "Direct Debit (UAEDDS)", "Bank Transfer"],
+  "phonePrefix": "+971",
+  "leaseDurationMonthsDefault": 12,
+  "billingDueDayDefault": 1,
+  "legalNotes": [
+    "Leases in Dubai must be registered in the Ejari system.",
+    "Rent increases are regulated by RERA rental index."
+  ],
+  "version": 1,
+  "updatedAt": 1700000000000
+}

@@ -1,0 +1,68 @@
+{
+  "code": "US",
+  "name": "United States",
+  "flag": "🇺🇸",
+  "locale": "en-US",
+  "timezones": ["America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles"],
+  "rtl": false,
+  "currency": {
+    "code": "USD",
+    "symbol": "$",
+    "minorUnits": 2,
+    "symbolPosition": "before",
+    "decimalSeparator": ".",
+    "groupSeparator": ",",
+    "groupingStyle": "standard",
+    "roundingMode": "half-up"
+  },
+  "dateFormat": "MM/DD/YYYY",
+  "timeFormat": "12h",
+  "firstDayOfWeek": 0,
+  "areaUnit": "sqft",
+  "deposit": {
+    "maxMonths": null,
+    "interestRequired": false,
+    "interestType": "none",
+    "interestRate": null,
+    "interestReferenceRate": null,
+    "interestMargin": 0,
+    "compounding": "none",
+    "dayCountBasis": "365",
+    "beneficiary": "tenant",
+    "protectionSchemeRequired": false,
+    "protectionDeadlineDays": null,
+    "interestPermitted": true
+  },
+  "lateFee": {
+    "allowed": "yes",
+    "type": "percent",
+    "maxValue": 5,
+    "maxBasis": "rent_percentage",
+    "graceDaysDefault": 5,
+    "noticeRequiredDays": 3,
+    "contractClauseRequired": true,
+    "islamicFinanceMode": false
+  },
+  "noticePeriods": {
+    "rentIncreaseDays": 30,
+    "terminationDays": 30,
+    "depositReturnDays": 21
+  },
+  "tax": {
+    "vatOnResidentialRent": false,
+    "withholdingTaxOnRent": false,
+    "withholdingThreshold": null,
+    "propertyTaxNote": "Property taxes vary by county and state."
+  },
+  "idDocumentTypes": ["SSN", "State Driver's License", "US Passport", "ITIN"],
+  "paymentMethods": ["ACH Bank Transfer", "Credit/Debit Card", "Check", "Zelle"],
+  "phonePrefix": "+1",
+  "leaseDurationMonthsDefault": 12,
+  "billingDueDayDefault": 1,
+  "legalNotes": [
+    "Security deposit return regulations and late fee caps vary by state law.",
+    "Fair Housing Act prohibits discrimination based on race, religion, sex, or family status."
+  ],
+  "version": 1,
+  "updatedAt": 1700000000000
+}

@@ -1,0 +1,68 @@
+{
+  "code": "PK",
+  "name": "Pakistan",
+  "flag": "🇵🇰",
+  "locale": "en-PK",
+  "timezones": ["Asia/Karachi"],
+  "rtl": false,
+  "currency": {
+    "code": "PKR",
+    "symbol": "Rs.",
+    "minorUnits": 2,
+    "symbolPosition": "before",
+    "decimalSeparator": ".",
+    "groupSeparator": ",",
+    "groupingStyle": "standard",
+    "roundingMode": "half-up"
+  },
+  "dateFormat": "DD/MM/YYYY",
+  "timeFormat": "12h",
+  "firstDayOfWeek": 1,
+  "areaUnit": "sqft",
+  "deposit": {
+    "maxMonths": 3,
+    "interestRequired": false,
+    "interestType": "none",
+    "interestRate": null,
+    "interestReferenceRate": null,
+    "interestMargin": 0,
+    "compounding": "none",
+    "dayCountBasis": "365",
+    "beneficiary": "landlord",
+    "protectionSchemeRequired": false,
+    "protectionDeadlineDays": null,
+    "interestPermitted": false
+  },
+  "lateFee": {
+    "allowed": "yes",
+    "type": "flat",
+    "maxValue": 5000,
+    "maxBasis": "fixed_amount",
+    "graceDaysDefault": 10,
+    "noticeRequiredDays": 15,
+    "contractClauseRequired": true,
+    "islamicFinanceMode": true
+  },
+  "noticePeriods": {
+    "rentIncreaseDays": 60,
+    "terminationDays": 30,
+    "depositReturnDays": 30
+  },
+  "tax": {
+    "vatOnResidentialRent": false,
+    "withholdingTaxOnRent": true,
+    "withholdingThreshold": 300000,
+    "propertyTaxNote": "Withholding tax under Section 155 of Income Tax Ordinance applies to commercial/high rents."
+  },
+  "idDocumentTypes": ["CNIC", "NICOP", "Pakistani Passport"],
+  "paymentMethods": ["Bank Transfer (IBFT)", "Easypaisa / JazzCash", "Cheque", "Cash"],
+  "phonePrefix": "+92",
+  "leaseDurationMonthsDefault": 11,
+  "billingDueDayDefault": 10,
+  "legalNotes": [
+    "Tenancy agreements should be registered with local police station / rent controller.",
+    "Islamic finance mode requires any late compensation fees to be allocated to charitable causes."
+  ],
+  "version": 1,
+  "updatedAt": 1700000000000
+}
