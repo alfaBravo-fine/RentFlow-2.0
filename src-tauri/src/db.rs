@@ -1788,7 +1788,7 @@ pub async fn record_deduction_transaction(
 pub async fn wipe_all_local_data(
     app: AppHandle,
     state: tauri::State<'_, DatabaseManager>,
-    auth_state: tauri::State<'_, crate::oauth::AuthState>,
+    auth_state: tauri::State<'_, crate::auth::AuthState>,
 ) -> Result<(), String> {
     {
         let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
@@ -1801,7 +1801,7 @@ pub async fn wipe_all_local_data(
         let _ = conn.execute("VACUUM;", []);
     }
 
-    crate::oauth::clear_auth_state_and_store(Some(&app), &auth_state);
+    crate::auth::clear_auth_state_and_store(Some(&app), &auth_state);
 
     Ok(())
 }

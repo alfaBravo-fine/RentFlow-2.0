@@ -1,62 +1,12 @@
-import React, { useState } from 'react';
-import { useAuthStore } from '../../stores/authStore';
+import React from 'react';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { RefreshCw } from '../../components/icons';
 import { RentFlowLogo } from '../../components/brand/RentFlowLogo';
-import { isTauri as detectTauri, tauriDrivePullBackup, tauriGoogleLogin } from '../../lib/tauri/bridge';
-import { useToast } from '../../components/toast/ToastContext';
+import { useAuth } from './AuthProvider';
 
 export const LoginView: React.FC = () => {
-  const isTauri = detectTauri();
-  const setAuthenticating = useAuthStore((s) => s.setAuthenticating);
-  const setGoogleSession = useAuthStore((s) => s.setGoogleSession);
-  const isAuthenticating = useAuthStore((s) => s.isAuthenticating);
-  const { showToast } = useToast();
-
-  const [statusText, setStatusText] = useState<string | null>(null);
-
-  const handleGoogleLogin = async () => {
-    if (!isTauri) {
-      showToast({ type: 'error', message: 'Please open the desktop app to log in.' });
-      return;
-    }
-
-    setAuthenticating(true, null);
-
-    try {
-      setStatusText('Opening your default browser for Google Sign-In...');
-      const authResponse = await tauriGoogleLogin();
-
-      if (!authResponse || !authResponse.email) {
-        throw new Error('Google sign-in returned an incomplete user profile.');
-      }
-
-      setStatusText('Authenticated! Checking Google Drive appDataFolder for encrypted backup...');
-      try {
-        await tauriDrivePullBackup(authResponse.id);
-      } catch (e) {
-        console.warn('[Desktop Backup Pull] Non-fatal backup check notice:', e);
-      }
-
-      setGoogleSession({
-        sub: authResponse.id,
-        email: authResponse.email,
-        name: authResponse.name || authResponse.email.split('@')[0],
-        picture: authResponse.picture,
-      });
-    } catch (err: unknown) {
-      console.error('[Desktop Sign-in Error]:', err);
-      const msg =
-        typeof err === 'string'
-          ? err
-          : (err as { message?: string })?.message || 'Desktop Google OAuth loopback failed.';
-      setAuthenticating(false, msg);
-      showToast({ type: 'error', message: msg });
-    } finally {
-      setStatusText(null);
-    }
-  };
+  const { isAuthenticating, statusText, loginWithGoogle } = useAuth();
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--bg-base)] p-4 sm:p-6 overflow-y-auto">
@@ -88,7 +38,7 @@ export const LoginView: React.FC = () => {
               type="button"
               variant="primary"
               className="w-full py-3 h-12 gap-3 font-semibold text-sm rounded-xl cursor-pointer shadow-md transition-all active:scale-[0.99]"
-              onClick={handleGoogleLogin}
+              onClick={() => void loginWithGoogle()}
               disabled={isAuthenticating}
             >
               <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">

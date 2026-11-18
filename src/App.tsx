@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Layout } from './components/layout/Layout';
 import { AppRoutes } from './routes';
 import { LoginView } from './features/auth/LoginView';
-import { useAuthStore } from './stores/authStore';
+import { AuthProvider, useAuth } from './features/auth/AuthProvider';
 import { seedInitialData } from './db/seed';
 import { ToastProvider } from './components/toast/ToastContext';
 import { ThemeProvider } from './components/theme/ThemeProvider';
@@ -130,30 +130,32 @@ function AuthenticatedContent() {
   );
 }
 
+function AppShell() {
+  const { isAuthenticated, user } = useAuth();
+
+  if (!isAuthenticated || !user) {
+    return <LoginView />;
+  }
+
+  return (
+    <QueryClientProvider client={queryClient}>
+      <AuthenticatedContent />
+    </QueryClientProvider>
+  );
+}
+
 export default function App() {
-  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
-  const user = useAuthStore((s) => s.user);
-  const hydrateDesktopSession = useAuthStore((s) => s.hydrateDesktopSession);
-
-  useEffect(() => {
-    void hydrateDesktopSession();
-  }, [hydrateDesktopSession]);
-
   return (
     <HashRouter>
       <SplashScreen durationMs={1500} />
       <AppErrorBoundary>
         <ThemeProvider>
           <ToastProvider>
-            <PrintProvider>
-              {!isAuthenticated || !user ? (
-                <LoginView />
-              ) : (
-                <QueryClientProvider client={queryClient}>
-                  <AuthenticatedContent />
-                </QueryClientProvider>
-              )}
-            </PrintProvider>
+            <AuthProvider>
+              <PrintProvider>
+                <AppShell />
+              </PrintProvider>
+            </AuthProvider>
           </ToastProvider>
         </ThemeProvider>
       </AppErrorBoundary>

@@ -58,6 +58,7 @@
   },
   "plugins": {
     "updater": {
+      "active": false,
       "endpoints": [
         "https://github.com/rentflow/rentflow-desktop/releases/latest/download/latest.json"
       ],

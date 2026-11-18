@@ -9,7 +9,7 @@ use sha2::Sha256;
 use tauri::{AppHandle, State};
 
 use crate::db::{db_export_all, db_import_all, DatabaseManager};
-use crate::oauth::{get_valid_access_token, refresh_google_access_token, AuthState};
+use crate::auth::{get_valid_access_token, refresh_google_access_token, AuthState};
 
 const SALT: &[u8] = b"rentflow_appdata_gcm_salt_v2";
 const APP_DATA_BACKUP_FILENAME: &str = "RentFlow_FullBackup.enc";

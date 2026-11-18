@@ -1,9 +1,9 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod auth;
 mod db;
 mod drive_sync;
-mod oauth;
 
 use db::{
     add_credit, add_expense, add_invoice, add_lease, add_maintenance_request, add_payment,
@@ -20,7 +20,7 @@ use db::{
     DatabaseManager,
 };
 use drive_sync::{drive_pull_backup, drive_push_backup};
-use oauth::{
+use auth::{
     google_get_current_user, google_login, google_oauth, google_oauth_logout, hydrate_auth_state,
     AuthState,
 };
