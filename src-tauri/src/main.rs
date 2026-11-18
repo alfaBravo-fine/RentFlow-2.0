@@ -29,6 +29,7 @@ use std::fs;
 use tauri::Manager;
 
 fn main() {
+    eprintln!("[RentFlow Tauri] Starting main() application entrypoint...");
     dotenvy::dotenv().ok();
 
     tauri::Builder::default()
@@ -43,16 +44,31 @@ fn main() {
         )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            eprintln!("[RentFlow Tauri] Resolving application data directory...");
             let app_data_dir = app
                 .path()
                 .app_data_dir()
-                .map_err(|e| format!("Failed to get app_data_dir: {}", e))?;
+                .map_err(|e| {
+                    let msg = format!("Failed to get app_data_dir: {}", e);
+                    eprintln!("[RentFlow Tauri ERROR] {}", msg);
+                    msg
+                })?;
 
             fs::create_dir_all(&app_data_dir)
-                .map_err(|e| format!("Failed to create app_data_dir: {}", e))?;
+                .map_err(|e| {
+                    let msg = format!("Failed to create app_data_dir: {}", e);
+                    eprintln!("[RentFlow Tauri ERROR] {}", msg);
+                    msg
+                })?;
 
             let db_path = app_data_dir.join("rentflow.db");
-            let db_manager = DatabaseManager::new(db_path)?;
+            eprintln!("[RentFlow Tauri] Opening SQLite database at {:?}...", db_path);
+            let db_manager = DatabaseManager::new(db_path.clone())
+                .map_err(|e| {
+                    let msg = format!("Failed to initialize database: {}", e);
+                    eprintln!("[RentFlow Tauri ERROR] {}", msg);
+                    msg
+                })?;
 
             let auth_state = AuthState::default();
             hydrate_auth_state(&app_data_dir, &auth_state);
@@ -60,7 +76,7 @@ fn main() {
             app.manage(db_manager);
             app.manage(auth_state);
 
-            println!("[RentFlow Tauri] SQLite database & Stronghold security initialized.");
+            eprintln!("[RentFlow Tauri] SQLite database & Stronghold security initialized successfully.");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -141,6 +157,9 @@ fn main() {
             drive_push_backup,
             drive_pull_backup,
         ])
-        .run(tauri::generate_context!())
+        .run({
+            eprintln!("[RentFlow Tauri] Running Tauri window builder and event loop...");
+            tauri::generate_context!()
+        })
         .expect("error while running RentFlow desktop application");
 }

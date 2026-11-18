@@ -184,15 +184,24 @@ fn insert_json_into_conn(conn: &Connection, table_name: &str, item: &Value) -> R
 
 pub fn open_connection(db_path: &Path) -> Result<Connection, String> {
     if let Some(parent) = db_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("Failed to create db dir: {}", e))?;
+        fs::create_dir_all(parent).map_err(|e| {
+            let msg = format!("Failed to create db dir {:?}: {}", parent, e);
+            eprintln!("[RentFlow DB ERROR] {}", msg);
+            msg
+        })?;
     }
 
     let conn = Connection::open(db_path)
-        .map_err(|e| format!("Failed to open SQLite database: {}", e))?;
+        .map_err(|e| {
+            let msg = format!("Failed to open SQLite database at {:?}: {}", db_path, e);
+            eprintln!("[RentFlow DB ERROR] {}", msg);
+            msg
+        })?;
 
     let _ = conn.execute("PRAGMA journal_mode = WAL;", []);
     let _ = conn.execute("PRAGMA foreign_keys = ON;", []);
 
+    eprintln!("[RentFlow DB] Successfully opened SQLite connection at {:?}", db_path);
     Ok(conn)
 }
 
