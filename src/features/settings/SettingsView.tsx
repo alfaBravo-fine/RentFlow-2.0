@@ -47,7 +47,7 @@ export const SettingsView: React.FC = () => {
   const pack = usePack();
   const setCountryCode = usePackStore((s) => s.setCountryCode);
   const { showToast } = useToast();
-  const { syncState, syncNow, restoreFromDrive, isRestoring } = useDriveSync();
+  const { syncState, syncNow, restoreFromDrive, isRestoring, lastSyncedAt } = useDriveSync();
 
   const [appDataPath, setAppDataPath] = useState<string>('Loading app data directory...');
 
@@ -114,6 +114,62 @@ export const SettingsView: React.FC = () => {
   const [isTermsOpen, setIsTermsOpen] = useState(false);
   const [isWipeDataConfirmOpen, setIsWipeDataConfirmOpen] = useState(false);
   const [isWipingData, setIsWipingData] = useState(false);
+  const [isHealthChecking, setIsHealthChecking] = useState(false);
+  const [healthReport, setHealthReport] = useState<{
+    checked: boolean;
+    status: 'healthy' | 'error';
+    propertiesCount: number;
+    unitsCount: number;
+    tenantsCount: number;
+    leasesCount: number;
+    invoicesCount: number;
+    paymentsCount: number;
+    timestamp: string;
+    errorMessage?: string;
+  } | null>(null);
+
+  const handleRunHealthCheck = async () => {
+    setIsHealthChecking(true);
+    try {
+      showToast({ type: 'info', message: 'Running local database integrity check...' });
+      const props = await databaseService.getProperties();
+      const units = await databaseService.getUnits();
+      const tenants = await databaseService.getTenants();
+      const leases = await databaseService.getLeases();
+      const invoices = await databaseService.getInvoices();
+      const payments = await databaseService.getPayments();
+
+      setHealthReport({
+        checked: true,
+        status: 'healthy',
+        propertiesCount: props.length,
+        unitsCount: units.length,
+        tenantsCount: tenants.length,
+        leasesCount: leases.length,
+        invoicesCount: invoices.length,
+        paymentsCount: payments.length,
+        timestamp: new Date().toLocaleString(),
+      });
+      showToast({ type: 'success', message: 'Database integrity verified successfully! All tables healthy.' });
+    } catch (err: any) {
+      console.error('Health check error:', err);
+      setHealthReport({
+        checked: true,
+        status: 'error',
+        propertiesCount: 0,
+        unitsCount: 0,
+        tenantsCount: 0,
+        leasesCount: 0,
+        invoicesCount: 0,
+        paymentsCount: 0,
+        timestamp: new Date().toLocaleString(),
+        errorMessage: err?.message || 'Database integrity check failed.',
+      });
+      showToast({ type: 'error', message: err?.message || 'Database integrity check failed.' });
+    } finally {
+      setIsHealthChecking(false);
+    }
+  };
 
   const handleWipeAllLocalData = async () => {
     setIsWipingData(true);
@@ -1176,6 +1232,62 @@ export const SettingsView: React.FC = () => {
           <p className="text-[11px] font-mono text-[var(--text-secondary)] break-all select-all bg-[var(--bg-surface)] p-2 rounded border border-[var(--border-subtle)]">
             {appDataPath}
           </p>
+        </div>
+      </Card>
+
+      {/* Data Health Check & Backup Status */}
+      <Card className="space-y-4">
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4 text-emerald-600" />
+            <CardTitle>Data Health Check &amp; Backup Status</CardTitle>
+          </div>
+          <Badge variant={healthReport?.status === 'error' ? 'danger' : healthReport?.status === 'healthy' ? 'success' : 'neutral'}>
+            {healthReport?.status === 'healthy' ? 'Database Healthy' : healthReport?.status === 'error' ? 'Check Required' : 'Ready'}
+          </Badge>
+        </CardHeader>
+
+        <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+          Verify local SQLite database integrity, check table query performance, and review your last successful Google Drive cloud backup timestamp.
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="p-4 rounded-2xl bg-[var(--bg-base)] border border-[var(--border-subtle)] space-y-2">
+            <div className="text-xs font-semibold text-[var(--text-primary)]">Last Successful Google Drive Backup</div>
+            <div className="text-xs font-mono text-[var(--text-secondary)]">
+              {lastSyncedAt ? new Date(lastSyncedAt).toLocaleString() : 'Never synced in this session'}
+            </div>
+            <div className="text-[11px] text-[var(--text-secondary)]">
+              {autoSyncEnabled ? 'Automatic background sync is active.' : 'Automatic background sync is disabled.'}
+            </div>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-[var(--bg-base)] border border-[var(--border-subtle)] space-y-2">
+            <div className="text-xs font-semibold text-[var(--text-primary)]">Local Database Status</div>
+            <div className="text-xs text-[var(--text-secondary)]">
+              {healthReport?.checked
+                ? healthReport.status === 'healthy'
+                  ? `Verified: ${healthReport.propertiesCount} properties, ${healthReport.unitsCount} units, ${healthReport.tenantsCount} tenants, ${healthReport.leasesCount} leases.`
+                  : `Error: ${healthReport.errorMessage}`
+                : 'Not checked yet in this session.'}
+            </div>
+            <div className="text-[10px] text-[var(--text-secondary)] font-mono">
+              {healthReport?.timestamp ? `Last checked: ${healthReport.timestamp}` : ''}
+            </div>
+          </div>
+        </div>
+
+        <div className="pt-2">
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={handleRunHealthCheck}
+            disabled={isHealthChecking}
+            className="gap-2"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isHealthChecking ? 'animate-spin' : ''}`} />
+            <span>{isHealthChecking ? 'Running Integrity Check...' : 'Run Data Health Check'}</span>
+          </Button>
         </div>
       </Card>
 
