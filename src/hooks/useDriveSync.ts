@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
+import { create } from 'zustand';
 import { useAuthStore } from '../stores/authStore';
 import { useAppSettingsStore } from '../stores/appSettingsStore';
 import { db } from '../db/client';
@@ -17,6 +18,24 @@ import {
 
 export type SyncState = 'idle' | 'pending' | 'syncing' | 'synced' | 'error';
 
+interface DriveSyncStore {
+  syncState: SyncState;
+  isRestoring: boolean;
+  syncError: string | null;
+  setSyncState: (syncState: SyncState) => void;
+  setIsRestoring: (isRestoring: boolean) => void;
+  setSyncError: (syncError: string | null) => void;
+}
+
+const useDriveSyncStore = create<DriveSyncStore>((set) => ({
+  syncState: 'idle',
+  isRestoring: false,
+  syncError: null,
+  setSyncState: (syncState) => set({ syncState }),
+  setIsRestoring: (isRestoring) => set({ isRestoring }),
+  setSyncError: (syncError) => set({ syncError }),
+}));
+
 export function useDriveSync() {
   const user = useAuthStore((s) => s.user);
   const accessToken = useAuthStore((s) => s.accessToken);
@@ -25,9 +44,12 @@ export function useDriveSync() {
   const setLastDriveSync = useAppSettingsStore((s) => s.setLastDriveSync);
   const setDriveFileId = useAppSettingsStore((s) => s.setDriveFileId);
 
-  const [syncState, setSyncState] = useState<SyncState>('idle');
-  const [isRestoring, setIsRestoring] = useState(false);
-  const [syncError, setSyncError] = useState<string | null>(null);
+  const syncState = useDriveSyncStore((s) => s.syncState);
+  const isRestoring = useDriveSyncStore((s) => s.isRestoring);
+  const syncError = useDriveSyncStore((s) => s.syncError);
+  const setSyncState = useDriveSyncStore((s) => s.setSyncState);
+  const setIsRestoring = useDriveSyncStore((s) => s.setIsRestoring);
+  const setSyncError = useDriveSyncStore((s) => s.setSyncError);
 
   const isSyncingRef = useRef(false);
   const hasQueuedSyncRef = useRef(false);
@@ -44,11 +66,13 @@ export function useDriveSync() {
 
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       setSyncState('idle');
+      setSyncError(null);
       return;
     }
 
     if (!isTauri() && isNonOAuthToken(accessToken)) {
       setSyncState('idle');
+      setSyncError(null);
       return;
     }
 
@@ -67,6 +91,7 @@ export function useDriveSync() {
       if (isTauri()) {
         const result = await tauriDrivePushBackup(user.sub);
         setSyncState('synced');
+        setSyncError(null);
         setLastDriveSync(result.synced_at);
         if (result.file_id) {
           setDriveFileId(result.file_id);
@@ -74,6 +99,7 @@ export function useDriveSync() {
       } else {
         const result = await backupToDrive(accessToken, user.sub);
         setSyncState('synced');
+        setSyncError(null);
         setLastDriveSync(result.syncedAt);
         if (result.fileId) {
           setDriveFileId(result.fileId);
@@ -97,7 +123,7 @@ export function useDriveSync() {
         }
       }
     }
-  }, [user, accessToken, setLastDriveSync, setDriveFileId]);
+  }, [user, accessToken, setLastDriveSync, setDriveFileId, setSyncState, setSyncError]);
 
   const triggerRestore = useCallback(async () => {
     if (!user) {
@@ -127,6 +153,7 @@ export function useDriveSync() {
         } else {
           setSyncState('idle');
         }
+        setSyncError(null);
         return { restored: result.restored, message: result.message, totalRecords: 0 };
       } else {
         const result = await restoreFromDrive(accessToken, user.sub);
@@ -137,6 +164,7 @@ export function useDriveSync() {
         } else {
           setSyncState('idle');
         }
+        setSyncError(null);
         return result;
       }
     } catch (err: any) {
@@ -148,7 +176,7 @@ export function useDriveSync() {
     } finally {
       setIsRestoring(false);
     }
-  }, [user, accessToken, setLastDriveSync]);
+  }, [user, accessToken, setLastDriveSync, setIsRestoring, setSyncState, setSyncError]);
 
   useEffect(() => {
     if (!isAuthenticated || !user) return;
@@ -157,6 +185,7 @@ export function useDriveSync() {
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       setIsRestoring(false);
       setSyncState('idle');
+      setSyncError(null);
       return;
     }
 
@@ -165,6 +194,7 @@ export function useDriveSync() {
       try {
         setIsRestoring(true);
         setSyncState('syncing');
+        setSyncError(null);
 
         if (isTauri()) {
           const result = await tauriDrivePullBackup(user.sub);
@@ -208,7 +238,7 @@ export function useDriveSync() {
     return () => {
       isMounted = false;
     };
-  }, [isAuthenticated, user, accessToken, setLastDriveSync]);
+  }, [isAuthenticated, user, accessToken, setLastDriveSync, setIsRestoring, setSyncState, setSyncError]);
 
   useEffect(() => {
     if (!isAuthenticated || !user) return;
@@ -219,6 +249,7 @@ export function useDriveSync() {
         clearTimeout(debounceTimerRef.current);
       }
       setSyncState('pending');
+      setSyncError(null);
       debounceTimerRef.current = setTimeout(() => {
         debounceTimerRef.current = null;
         void triggerUpload().catch(() => {});
@@ -232,7 +263,7 @@ export function useDriveSync() {
         debounceTimerRef.current = null;
       }
     };
-  }, [isAuthenticated, user, triggerUpload]);
+  }, [isAuthenticated, user, triggerUpload, setSyncState, setSyncError]);
 
   useEffect(() => {
     if (!isAuthenticated || !user) return;

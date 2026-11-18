@@ -78,6 +78,8 @@ fn query_table_rows(conn: &Connection, table_name: &str) -> Result<Vec<Value>, S
 
     let sql = if table_name == "audit_log" || table_name == "sync_queue" {
         format!("SELECT * FROM {} ORDER BY created_at DESC", table_name)
+    } else if table_name == "app_settings" {
+        format!("SELECT * FROM {} ORDER BY updated_at DESC", table_name)
     } else {
         format!(
             "SELECT * FROM {} WHERE deleted_at IS NULL ORDER BY updated_at DESC",
@@ -110,6 +112,8 @@ fn query_item_by_id(conn: &Connection, table_name: &str, id: &str) -> Result<Opt
 
     let sql = if table_name == "audit_log" || table_name == "sync_queue" {
         format!("SELECT * FROM {} WHERE id = ? LIMIT 1", table_name)
+    } else if table_name == "app_settings" {
+        format!("SELECT * FROM {} WHERE key = ? LIMIT 1", table_name)
     } else {
         format!(
             "SELECT * FROM {} WHERE id = ? AND deleted_at IS NULL LIMIT 1",
@@ -614,7 +618,8 @@ impl DatabaseManager {
             CREATE TABLE IF NOT EXISTS app_settings (
                 key TEXT PRIMARY KEY,
                 value_json TEXT NOT NULL,
-                updated_at INTEGER NOT NULL
+                updated_at INTEGER NOT NULL,
+                deleted_at INTEGER
             );
             "#,
         )
@@ -641,6 +646,7 @@ impl DatabaseManager {
             "ALTER TABLE credits ADD COLUMN source_payment_id TEXT;",
             "ALTER TABLE credits ADD COLUMN status TEXT DEFAULT 'active';",
             "ALTER TABLE credits ADD COLUMN created_at INTEGER DEFAULT 0;",
+            "ALTER TABLE app_settings ADD COLUMN deleted_at INTEGER;",
         ];
         for stmt in alter_statements {
             let _ = conn.execute(stmt, []);
@@ -754,10 +760,12 @@ pub async fn db_update_item(
         return Ok(updates);
     }
 
+    let pk_col = if table_name == "app_settings" { "key" } else { "id" };
     let sql = format!(
-        "UPDATE {} SET {} WHERE id = ?",
+        "UPDATE {} SET {} WHERE {} = ?",
         table_name,
-        set_clauses.join(", ")
+        set_clauses.join(", "),
+        pk_col
     );
 
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
@@ -778,12 +786,20 @@ pub async fn db_delete_item(
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     let now_ts = current_timestamp_ms();
 
-    let sql = format!(
-        "UPDATE {} SET deleted_at = ?, updated_at = ? WHERE id = ?",
-        table_name
-    );
-    conn.execute(&sql, params![now_ts, now_ts, id])
-        .map_err(|e| e.to_string())?;
+    if table_name == "app_settings" {
+        conn.execute("DELETE FROM app_settings WHERE key = ?", params![id])
+            .map_err(|e| e.to_string())?;
+    } else if table_name == "audit_log" || table_name == "sync_queue" {
+        let sql = format!("DELETE FROM {} WHERE id = ?", table_name);
+        conn.execute(&sql, params![id]).map_err(|e| e.to_string())?;
+    } else {
+        let sql = format!(
+            "UPDATE {} SET deleted_at = ?, updated_at = ? WHERE id = ?",
+            table_name
+        );
+        conn.execute(&sql, params![now_ts, now_ts, id])
+            .map_err(|e| e.to_string())?;
+    }
 
     Ok(())
 }
