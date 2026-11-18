@@ -1783,7 +1783,7 @@ pub async fn record_deduction_transaction(
     }))
 }
 
-/// Wipes all SQLite tables and clears persisted Stronghold/OAuth vault data locally.
+/// Wipes all SQLite tables and clears persisted OAuth token store data locally.
 #[tauri::command]
 pub async fn wipe_all_local_data(
     app: AppHandle,
@@ -1801,8 +1801,7 @@ pub async fn wipe_all_local_data(
         let _ = conn.execute("VACUUM;", []);
     }
 
-    let app_dir = app.path().app_data_dir().ok();
-    crate::oauth::clear_auth_state_and_vault(app_dir.as_deref(), &auth_state);
+    crate::oauth::clear_auth_state_and_store(Some(&app), &auth_state);
 
     Ok(())
 }

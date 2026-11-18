@@ -24,7 +24,6 @@ use oauth::{
     google_get_current_user, google_login, google_oauth, google_oauth_logout, hydrate_auth_state,
     AuthState,
 };
-use sha2::{Digest, Sha256};
 use std::fs;
 use tauri::Manager;
 
@@ -32,51 +31,37 @@ fn main() {
     eprintln!("[RentFlow Tauri] Starting main() application entrypoint...");
     dotenvy::dotenv().ok();
 
-    tauri::Builder::default()
+    let run_result = tauri::Builder::default()
         .plugin(tauri_plugin_oauth::init())
-        .plugin(
-            tauri_plugin_stronghold::Builder::new(|password| {
-                let mut hasher = Sha256::new();
-                hasher.update(password.as_bytes());
-                hasher.finalize().to_vec()
-            })
-            .build(),
-        )
+        .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
-            eprintln!("[RentFlow Tauri] Resolving application data directory...");
-            let app_data_dir = app
-                .path()
-                .app_data_dir()
-                .map_err(|e| {
-                    let msg = format!("Failed to get app_data_dir: {}", e);
-                    eprintln!("[RentFlow Tauri ERROR] {}", msg);
-                    msg
-                })?;
+            if let Err(e) = (|| -> Result<(), Box<dyn std::error::Error>> {
+                eprintln!("[RentFlow Tauri] Initializing SQLite DB & Store...");
+                let app_data_dir = app
+                    .path()
+                    .app_data_dir()
+                    .map_err(|e| format!("Failed to get app_data_dir: {}", e))?;
 
-            fs::create_dir_all(&app_data_dir)
-                .map_err(|e| {
-                    let msg = format!("Failed to create app_data_dir: {}", e);
-                    eprintln!("[RentFlow Tauri ERROR] {}", msg);
-                    msg
-                })?;
+                fs::create_dir_all(&app_data_dir)
+                    .map_err(|e| format!("Failed to create app_data_dir: {}", e))?;
 
-            let db_path = app_data_dir.join("rentflow.db");
-            eprintln!("[RentFlow Tauri] Opening SQLite database at {:?}...", db_path);
-            let db_manager = DatabaseManager::new(db_path.clone())
-                .map_err(|e| {
-                    let msg = format!("Failed to initialize database: {}", e);
-                    eprintln!("[RentFlow Tauri ERROR] {}", msg);
-                    msg
-                })?;
+                let db_path = app_data_dir.join("rentflow.db");
+                eprintln!("[RentFlow Tauri] Opening database at {:?}...", db_path);
+                let db_manager = DatabaseManager::new(db_path)
+                    .map_err(|e| format!("Failed to initialize database: {}", e))?;
 
-            let auth_state = AuthState::default();
-            hydrate_auth_state(&app_data_dir, &auth_state);
+                let auth_state = AuthState::default();
+                hydrate_auth_state(app.handle(), &auth_state);
 
-            app.manage(db_manager);
-            app.manage(auth_state);
+                app.manage(db_manager);
+                app.manage(auth_state);
 
-            eprintln!("[RentFlow Tauri] SQLite database & Stronghold security initialized successfully.");
+                eprintln!("[RentFlow Tauri] SQLite database & Store OAuth state initialized.");
+                Ok(())
+            })() {
+                eprintln!("FATAL SETUP ERROR: {}", e);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -160,6 +145,9 @@ fn main() {
         .run({
             eprintln!("[RentFlow Tauri] Running Tauri window builder and event loop...");
             tauri::generate_context!()
-        })
-        .expect("error while running RentFlow desktop application");
+        });
+
+    if let Err(e) = run_result {
+        eprintln!("FATAL RUNTIME ERROR while running RentFlow desktop application: {}", e);
+    }
 }

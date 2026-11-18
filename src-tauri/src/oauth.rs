@@ -1,20 +1,13 @@
-use aes_gcm::{
-    aead::{Aead, KeyInit},
-    Aes256Gcm, Nonce,
-};
-use oauth2::basic::BasicClient;
-use oauth2::reqwest::async_http_client;
-use oauth2::{
-    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge, RedirectUrl,
-    Scope, TokenResponse, TokenUrl,
-};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager, State};
+use tauri_plugin_store::StoreExt;
 
 // Native Desktop OAuth Credentials (strictly scoped to Rust backend)
 const CLIENT_ID: &str = "509114057579-hujt8mv20tj4vbul7f9ae4ua73j87eeq.apps.googleusercontent.com";
@@ -22,29 +15,44 @@ const CLIENT_SECRET: &str = "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";
 
 const GOOGLE_AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-const VAULT_FILENAME: &str = "oauth_stronghold.bin";
+const TOKEN_STORE_FILENAME: &str = "oauth_tokens.json";
+const SESSION_STORE_KEY: &str = "google_oauth_session";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct UserProfile {
+pub struct AuthResponse {
     pub id: String,
     pub email: String,
     pub name: String,
     pub picture: Option<String>,
 }
 
+pub type UserProfile = AuthResponse;
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct PersistedSession {
     pub access_token: String,
     pub refresh_token: Option<String>,
-    pub user_profile: UserProfile,
+    pub user_profile: AuthResponse,
     pub drive_file_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GoogleTokenResponse {
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GoogleApiErrorBody {
+    pub error: Option<String>,
+    pub error_description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct GoogleUserInfoResponse {
     pub sub: String,
     pub email: String,
-    pub name: String,
+    pub name: Option<String>,
     pub picture: Option<String>,
 }
 
@@ -53,13 +61,13 @@ struct GoogleRefreshResponse {
     pub access_token: String,
 }
 
-// In-memory secure token store - RAW TOKENS NEVER EXPOSED TO REACT FRONTEND
+// In-memory token store - RAW TOKENS NEVER EXPOSED TO REACT FRONTEND
 pub struct AuthState {
     pub access_token: Mutex<Option<String>>,
     pub refresh_token: Mutex<Option<String>>,
-    pub user_profile: Mutex<Option<UserProfile>>,
+    pub user_profile: Mutex<Option<AuthResponse>>,
     pub drive_file_id: Mutex<Option<String>>,
-    pub vault_dir: Mutex<Option<PathBuf>>,
+    pub store_dir: Mutex<Option<PathBuf>>,
 }
 
 impl Default for AuthState {
@@ -69,37 +77,43 @@ impl Default for AuthState {
             refresh_token: Mutex::new(None),
             user_profile: Mutex::new(None),
             drive_file_id: Mutex::new(None),
-            vault_dir: Mutex::new(None),
+            store_dir: Mutex::new(None),
         }
     }
 }
 
-fn derive_vault_key(vault_dir: &Path) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(b"rentflow_stronghold_session_key_v2:");
-    hasher.update(CLIENT_ID.as_bytes());
-    hasher.update(vault_dir.to_string_lossy().as_bytes());
-    let digest = hasher.finalize();
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&digest[..32]);
-    key
-}
+fn save_persisted_session(app: &AppHandle, state: &AuthState) -> Result<(), String> {
+    let profile = state
+        .user_profile
+        .lock()
+        .map_err(|e| format!("Failed to lock user_profile: {}", e))?
+        .clone();
+    let access_token = state
+        .access_token
+        .lock()
+        .map_err(|e| format!("Failed to lock access_token: {}", e))?
+        .clone();
+    let refresh_token = state
+        .refresh_token
+        .lock()
+        .map_err(|e| format!("Failed to lock refresh_token: {}", e))?
+        .clone();
+    let drive_file_id = state
+        .drive_file_id
+        .lock()
+        .map_err(|e| format!("Failed to lock drive_file_id: {}", e))?
+        .clone();
 
-fn save_persisted_session(state: &AuthState) {
-    let vault_dir = state.vault_dir.lock().unwrap().clone();
-    let Some(dir) = vault_dir else {
-        return;
-    };
+    let store = app
+        .store(TOKEN_STORE_FILENAME)
+        .map_err(|e| format!("Failed to open OAuth token store: {}", e))?;
 
-    let profile = state.user_profile.lock().unwrap().clone();
-    let access_token = state.access_token.lock().unwrap().clone();
-    let refresh_token = state.refresh_token.lock().unwrap().clone();
-    let drive_file_id = state.drive_file_id.lock().unwrap().clone();
-
-    let vault_path = dir.join(VAULT_FILENAME);
     let (Some(user_profile), Some(access_token)) = (profile, access_token) else {
-        let _ = fs::remove_file(vault_path);
-        return;
+        store.delete(SESSION_STORE_KEY);
+        store
+            .save()
+            .map_err(|e| format!("Failed to persist cleared OAuth store: {}", e))?;
+        return Ok(());
     };
 
     let session = PersistedSession {
@@ -109,69 +123,88 @@ fn save_persisted_session(state: &AuthState) {
         drive_file_id,
     };
 
-    if let Ok(json_bytes) = serde_json::to_vec(&session) {
-        let key = derive_vault_key(&dir);
-        if let Ok(cipher) = Aes256Gcm::new_from_slice(&key) {
-            let mut nonce_bytes = [0u8; 12];
-            rand::thread_rng().fill_bytes(&mut nonce_bytes);
-            let nonce = Nonce::from_slice(&nonce_bytes);
-            if let Ok(ciphertext) = cipher.encrypt(nonce, json_bytes.as_slice()) {
-                let mut payload = Vec::with_capacity(12 + ciphertext.len());
-                payload.extend_from_slice(&nonce_bytes);
-                payload.extend_from_slice(&ciphertext);
-                let _ = fs::create_dir_all(&dir);
-                let _ = fs::write(vault_path, payload);
-            }
+    let json_val = serde_json::to_value(&session)
+        .map_err(|e| format!("Failed to serialize OAuth session: {}", e))?;
+    store.set(SESSION_STORE_KEY, json_val);
+    store
+        .save()
+        .map_err(|e| format!("Failed to save OAuth tokens to store: {}", e))?;
+
+    Ok(())
+}
+
+pub fn hydrate_auth_state(app: &AppHandle, state: &AuthState) {
+    if let Ok(app_data_dir) = app.path().app_data_dir() {
+        if let Ok(mut dir_guard) = state.store_dir.lock() {
+            *dir_guard = Some(app_data_dir);
+        }
+    }
+
+    let Ok(store) = app.store(TOKEN_STORE_FILENAME) else {
+        return;
+    };
+
+    let Some(val) = store.get(SESSION_STORE_KEY) else {
+        return;
+    };
+
+    if let Ok(session) = serde_json::from_value::<PersistedSession>(val) {
+        if let Ok(mut guard) = state.access_token.lock() {
+            *guard = Some(session.access_token);
+        }
+        if let Ok(mut guard) = state.refresh_token.lock() {
+            *guard = session.refresh_token;
+        }
+        if let Ok(mut guard) = state.user_profile.lock() {
+            *guard = Some(session.user_profile);
+        }
+        if let Ok(mut guard) = state.drive_file_id.lock() {
+            *guard = session.drive_file_id;
         }
     }
 }
 
-pub fn hydrate_auth_state(app_data_dir: &Path, state: &AuthState) {
-    *state.vault_dir.lock().unwrap() = Some(app_data_dir.to_path_buf());
-    let vault_path = app_data_dir.join(VAULT_FILENAME);
-    let Ok(bytes) = fs::read(vault_path) else {
-        return;
-    };
-    if bytes.len() <= 12 {
-        return;
+pub fn clear_auth_state_and_store(app: Option<&AppHandle>, state: &AuthState) {
+    if let Ok(mut guard) = state.access_token.lock() {
+        *guard = None;
+    }
+    if let Ok(mut guard) = state.refresh_token.lock() {
+        *guard = None;
+    }
+    if let Ok(mut guard) = state.user_profile.lock() {
+        *guard = None;
+    }
+    if let Ok(mut guard) = state.drive_file_id.lock() {
+        *guard = None;
     }
 
-    let key = derive_vault_key(app_data_dir);
-    let Ok(cipher) = Aes256Gcm::new_from_slice(&key) else {
-        return;
-    };
-    let (nonce_bytes, ciphertext) = bytes.split_at(12);
-    let Ok(plaintext) = cipher.decrypt(Nonce::from_slice(nonce_bytes), ciphertext) else {
-        return;
-    };
-    if let Ok(session) = serde_json::from_slice::<PersistedSession>(&plaintext) {
-        *state.access_token.lock().unwrap() = Some(session.access_token);
-        *state.refresh_token.lock().unwrap() = session.refresh_token;
-        *state.user_profile.lock().unwrap() = Some(session.user_profile);
-        *state.drive_file_id.lock().unwrap() = session.drive_file_id;
-    }
-}
-
-pub fn clear_auth_state_and_vault(app_data_dir: Option<&Path>, state: &AuthState) {
-    *state.access_token.lock().unwrap() = None;
-    *state.refresh_token.lock().unwrap() = None;
-    *state.user_profile.lock().unwrap() = None;
-    *state.drive_file_id.lock().unwrap() = None;
-
-    if let Some(dir) = app_data_dir {
-        let _ = fs::remove_file(dir.join(VAULT_FILENAME));
-        let _ = fs::remove_file(dir.join("stronghold.hold"));
-    } else if let Some(dir) = state.vault_dir.lock().unwrap().clone() {
-        let _ = fs::remove_file(dir.join(VAULT_FILENAME));
-        let _ = fs::remove_file(dir.join("stronghold.hold"));
+    if let Some(app_handle) = app {
+        if let Ok(store) = app_handle.store(TOKEN_STORE_FILENAME) {
+            store.delete(SESSION_STORE_KEY);
+            let _ = store.save();
+        }
+        if let Ok(dir) = app_handle.path().app_data_dir() {
+            let _ = fs::remove_file(dir.join(TOKEN_STORE_FILENAME));
+            let _ = fs::remove_file(dir.join("oauth_stronghold.bin"));
+            let _ = fs::remove_file(dir.join("stronghold.hold"));
+        }
+    } else if let Ok(guard) = state.store_dir.lock() {
+        if let Some(dir) = guard.as_ref() {
+            let _ = fs::remove_file(dir.join(TOKEN_STORE_FILENAME));
+            let _ = fs::remove_file(dir.join("oauth_stronghold.bin"));
+            let _ = fs::remove_file(dir.join("stronghold.hold"));
+        }
     }
 }
 
-pub async fn refresh_google_access_token(state: &AuthState) -> Result<String, String> {
+pub async fn refresh_google_access_token(
+    app: Option<&AppHandle>,
+    state: &AuthState,
+) -> Result<String, String> {
     let refresh_token = state
         .refresh_token
         .lock()
-        .unwrap()
+        .map_err(|e| format!("Failed to lock refresh_token: {}", e))?
         .clone()
         .ok_or_else(|| "Session expired. Please sign in with Google again.".to_string())?;
 
@@ -189,8 +222,12 @@ pub async fn refresh_google_access_token(state: &AuthState) -> Result<String, St
         .map_err(|e| format!("Network error refreshing Google token: {}", e))?;
 
     if !res.status().is_success() {
+        let status = res.status();
         let err_body = res.text().await.unwrap_or_default();
-        return Err(format!("Failed to refresh Google session: {}", err_body));
+        return Err(format!(
+            "Failed to refresh Google session ({}): {}",
+            status, err_body
+        ));
     }
 
     let data: GoogleRefreshResponse = res
@@ -198,138 +235,260 @@ pub async fn refresh_google_access_token(state: &AuthState) -> Result<String, St
         .await
         .map_err(|e| format!("Failed to parse refresh response: {}", e))?;
 
-    *state.access_token.lock().unwrap() = Some(data.access_token.clone());
-    save_persisted_session(state);
+    {
+        let mut guard = state
+            .access_token
+            .lock()
+            .map_err(|e| format!("Failed to lock access_token: {}", e))?;
+        *guard = Some(data.access_token.clone());
+    }
+
+    if let Some(app_handle) = app {
+        let _ = save_persisted_session(app_handle, state);
+    }
+
     Ok(data.access_token)
 }
 
-pub async fn get_valid_access_token(state: &AuthState) -> Result<String, String> {
-    if let Some(token) = state.access_token.lock().unwrap().clone() {
+pub async fn get_valid_access_token(
+    app: Option<&AppHandle>,
+    state: &AuthState,
+) -> Result<String, String> {
+    let existing = state
+        .access_token
+        .lock()
+        .map_err(|e| format!("Failed to lock access_token: {}", e))?
+        .clone();
+
+    if let Some(token) = existing {
         if !token.is_empty() {
             return Ok(token);
         }
     }
-    refresh_google_access_token(state).await
+
+    refresh_google_access_token(app, state).await
 }
 
-#[tauri::command]
-pub async fn google_login(
-    app: AppHandle,
-    state: State<'_, AuthState>,
-) -> Result<UserProfile, String> {
-    if let Ok(dir) = app.path().app_data_dir() {
-        *state.vault_dir.lock().unwrap() = Some(dir);
-    }
+fn generate_pkce_pair() -> (String, String) {
+    let mut verifier_bytes = [0u8; 48];
+    rand::thread_rng().fill_bytes(&mut verifier_bytes);
+    let verifier = URL_SAFE_NO_PAD.encode(verifier_bytes);
 
-    let (tx, rx) = tokio::sync::oneshot::channel::<Result<String, String>>();
-    let tx_mutex = std::sync::Arc::new(Mutex::new(Some(tx)));
+    let digest = Sha256::digest(verifier.as_bytes());
+    let challenge = URL_SAFE_NO_PAD.encode(digest);
+    (verifier, challenge)
+}
 
-    // 1. Start loopback callback listener via tauri-plugin-oauth on 127.0.0.1:<port>/callback
-    let port = tauri_plugin_oauth::start(move |url| {
-        if let Ok(parsed_url) = reqwest::Url::parse(&url) {
+fn generate_csrf_state() -> String {
+    let mut state_bytes = [0u8; 24];
+    rand::thread_rng().fill_bytes(&mut state_bytes);
+    URL_SAFE_NO_PAD.encode(state_bytes)
+}
+
+/// Pure loopback callback parser — never touches UI threads or Tauri windows directly.
+fn google_callback(
+    url: String,
+    tx_arc: &Arc<Mutex<Option<tokio::sync::oneshot::Sender<Result<String, String>>>>>,
+) {
+    let result = match reqwest::Url::parse(&url) {
+        Ok(parsed_url) => {
             let mut auth_code: Option<String> = None;
             let mut oauth_error: Option<String> = None;
+            let mut oauth_error_desc: Option<String> = None;
 
             for (k, v) in parsed_url.query_pairs() {
                 if k == "code" {
                     auth_code = Some(v.to_string());
                 } else if k == "error" {
                     oauth_error = Some(v.to_string());
+                } else if k == "error_description" {
+                    oauth_error_desc = Some(v.to_string());
                 }
             }
 
-            if let Some(sender) = tx_mutex.lock().unwrap().take() {
-                if let Some(err) = oauth_error {
-                    let _ = sender.send(Err(format!("Google sign-in denied: {}", err)));
-                } else if let Some(code) = auth_code {
-                    let _ = sender.send(Ok(code));
-                } else {
-                    let _ = sender.send(Err("No authorization code returned from Google.".to_string()));
-                }
+            if let Some(err) = oauth_error {
+                let detail = oauth_error_desc.unwrap_or(err);
+                Err(format!("Google sign-in denied: {}", detail))
+            } else if let Some(code) = auth_code {
+                Ok(code)
+            } else {
+                Err("No authorization code returned from Google callback.".to_string())
             }
         }
-    })
-    .map_err(|e| format!("Failed to start local OAuth loopback server: {}", e))?;
+        Err(e) => Err(format!("Failed to parse OAuth callback URL: {}", e)),
+    };
+
+    if let Ok(mut guard) = tx_arc.lock() {
+        if let Some(sender) = guard.take() {
+            let _ = sender.send(result);
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn google_login(
+    app: AppHandle,
+    state: State<'_, AuthState>,
+) -> Result<AuthResponse, String> {
+    if let Ok(dir) = app.path().app_data_dir() {
+        if let Ok(mut dir_guard) = state.store_dir.lock() {
+            *dir_guard = Some(dir);
+        }
+    }
+
+    let (port_tx, port_rx) = tokio::sync::oneshot::channel::<Result<u16, String>>();
+    let (code_tx, code_rx) = tokio::sync::oneshot::channel::<Result<String, String>>();
+    let code_tx_arc = Arc::new(Mutex::new(Some(code_tx)));
+
+    // 1. Spawn the OAuth loopback server in a separate Tokio task to avoid blocking Tauri's main event loop
+    let callback_tx_arc = Arc::clone(&code_tx_arc);
+    tokio::spawn(async move {
+        let start_result = tauri_plugin_oauth::start(move |url| {
+            google_callback(url, &callback_tx_arc);
+        })
+        .map_err(|e| format!("Failed to start local OAuth loopback server: {}", e));
+
+        let _ = port_tx.send(start_result);
+    });
+
+    let port = port_rx
+        .await
+        .map_err(|_| "OAuth loopback server task terminated unexpectedly.".to_string())??;
 
     let redirect_uri = format!("http://127.0.0.1:{}/callback", port);
 
-    // 2. Configure oauth2 BasicClient with PKCE
-    let auth_url = AuthUrl::new(GOOGLE_AUTH_URL.to_string()).map_err(|e| e.to_string())?;
-    let token_url = TokenUrl::new(GOOGLE_TOKEN_URL.to_string()).map_err(|e| e.to_string())?;
-    let redirect = RedirectUrl::new(redirect_uri).map_err(|e| e.to_string())?;
+    // 2. Build Google OAuth authorization URL with PKCE
+    let (code_verifier, code_challenge) = generate_pkce_pair();
+    let csrf_state = generate_csrf_state();
 
-    let client = BasicClient::new(
-        ClientId::new(CLIENT_ID.to_string()),
-        Some(ClientSecret::new(CLIENT_SECRET.to_string())),
-        auth_url,
-        Some(token_url),
+    let authorize_url = reqwest::Url::parse_with_params(
+        GOOGLE_AUTH_URL,
+        &[
+            ("client_id", CLIENT_ID),
+            ("redirect_uri", redirect_uri.as_str()),
+            ("response_type", "code"),
+            (
+                "scope",
+                "openid email profile https://www.googleapis.com/auth/drive.appdata",
+            ),
+            ("code_challenge", code_challenge.as_str()),
+            ("code_challenge_method", "S256"),
+            ("access_type", "offline"),
+            ("prompt", "consent"),
+            ("state", csrf_state.as_str()),
+        ],
     )
-    .set_redirect_uri(redirect);
-
-    let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
-    let (authorize_url, _csrf_token) = client
-        .authorize_url(CsrfToken::new_random)
-        .add_scope(Scope::new("openid".to_string()))
-        .add_scope(Scope::new("email".to_string()))
-        .add_scope(Scope::new("profile".to_string()))
-        .add_scope(Scope::new("https://www.googleapis.com/auth/drive.appdata".to_string()))
-        .add_extra_param("access_type", "offline")
-        .add_extra_param("prompt", "consent")
-        .set_pkce_challenge(pkce_challenge)
-        .url();
+    .map_err(|e| format!("Failed to build Google authorization URL: {}", e))?;
 
     // 3. Open system default browser
     open::that(authorize_url.as_str())
         .map_err(|e| format!("Failed to open system browser for Google Login: {}", e))?;
 
-    // 4. Await callback authorization code
-    let auth_code = rx
+    // 4. Await callback authorization code from the spawned oneshot channel (5 minute timeout)
+    let code_result = tokio::time::timeout(std::time::Duration::from_secs(300), code_rx)
         .await
-        .map_err(|_| "Google OAuth loopback cancelled or timed out.".to_string())??;
+        .map_err(|_| "Google OAuth login timed out waiting for browser authorization.".to_string())?
+        .map_err(|_| "Google OAuth loopback channel closed before receiving authorization code.".to_string())?;
 
-    // 5. Exchange code for tokens via oauth2 crate
-    let token_response = client
-        .exchange_code(AuthorizationCode::new(auth_code))
-        .set_pkce_verifier(pkce_verifier)
-        .request_async(async_http_client)
-        .await
-        .map_err(|e| format!("OAuth token exchange failed: {}", e))?;
+    let auth_code = code_result?;
 
-    let access_token = token_response.access_token().secret().to_string();
-    let refresh_token = token_response.refresh_token().map(|t| t.secret().to_string());
-
-    // 6. Fetch real Google user profile
+    // 5. Exchange authorization code for tokens via reqwest POST including client_secret
     let http_client = reqwest::Client::new();
-    let userinfo_res = http_client
-        .get("https://www.googleapis.com/oauth2/v3/userinfo")
-        .header("Authorization", format!("Bearer {}", access_token))
+    let token_res = http_client
+        .post(GOOGLE_TOKEN_URL)
+        .form(&[
+            ("code", auth_code.as_str()),
+            ("client_id", CLIENT_ID),
+            ("client_secret", CLIENT_SECRET),
+            ("redirect_uri", redirect_uri.as_str()),
+            ("grant_type", "authorization_code"),
+            ("code_verifier", code_verifier.as_str()),
+        ])
         .send()
         .await
-        .map_err(|e| format!("Failed to fetch Google userinfo: {}", e))?;
+        .map_err(|e| format!("Network error during Google token exchange: {}", e))?;
+
+    if !token_res.status().is_success() {
+        let status = token_res.status();
+        let raw_err = token_res.text().await.unwrap_or_default();
+        if let Ok(parsed_err) = serde_json::from_str::<GoogleApiErrorBody>(&raw_err) {
+            let api_msg = parsed_err
+                .error_description
+                .or(parsed_err.error)
+                .unwrap_or_else(|| raw_err.clone());
+            return Err(format!("Google OAuth token exchange failed ({}): {}", status, api_msg));
+        }
+        return Err(format!(
+            "Google OAuth token exchange failed ({}): {}",
+            status, raw_err
+        ));
+    }
+
+    let token_data: GoogleTokenResponse = token_res
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Google token response: {}", e))?;
+
+    // 6. Fetch authenticated Google user profile
+    let userinfo_res = http_client
+        .get("https://www.googleapis.com/oauth2/v3/userinfo")
+        .header("Authorization", format!("Bearer {}", token_data.access_token))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch Google user profile: {}", e))?;
 
     if !userinfo_res.status().is_success() {
-        return Err("Failed to retrieve authenticated Google user profile.".to_string());
+        let status = userinfo_res.status();
+        let err_body = userinfo_res.text().await.unwrap_or_default();
+        return Err(format!(
+            "Failed to retrieve Google user profile ({}): {}",
+            status, err_body
+        ));
     }
 
     let userinfo: GoogleUserInfoResponse = userinfo_res
         .json()
         .await
-        .map_err(|e| format!("Invalid userinfo response: {}", e))?;
+        .map_err(|e| format!("Invalid Google userinfo JSON response: {}", e))?;
 
-    let profile = UserProfile {
+    let fallback_name = userinfo
+        .email
+        .split('@')
+        .next()
+        .unwrap_or("RentFlow User")
+        .to_string();
+
+    let profile = AuthResponse {
         id: userinfo.sub,
         email: userinfo.email,
-        name: userinfo.name,
+        name: userinfo.name.unwrap_or(fallback_name),
         picture: userinfo.picture,
     };
 
-    // 7. Store tokens strictly in Rust backend + encrypted vault (NEVER return tokens to React)
-    *state.access_token.lock().unwrap() = Some(access_token);
-    if refresh_token.is_some() {
-        *state.refresh_token.lock().unwrap() = refresh_token;
+    // 7. Store tokens in AuthState and persist to tauri-plugin-store JSON in app_data_dir
+    {
+        let mut guard = state
+            .access_token
+            .lock()
+            .map_err(|e| format!("Failed to lock access_token: {}", e))?;
+        *guard = Some(token_data.access_token);
     }
-    *state.user_profile.lock().unwrap() = Some(profile.clone());
-    save_persisted_session(&state);
+    if token_data.refresh_token.is_some() {
+        let mut guard = state
+            .refresh_token
+            .lock()
+            .map_err(|e| format!("Failed to lock refresh_token: {}", e))?;
+        *guard = token_data.refresh_token;
+    }
+    {
+        let mut guard = state
+            .user_profile
+            .lock()
+            .map_err(|e| format!("Failed to lock user_profile: {}", e))?;
+        *guard = Some(profile.clone());
+    }
+
+    save_persisted_session(&app, &state)?;
 
     Ok(profile)
 }
@@ -338,7 +497,7 @@ pub async fn google_login(
 pub async fn google_oauth(
     app: AppHandle,
     state: State<'_, AuthState>,
-) -> Result<UserProfile, String> {
+) -> Result<AuthResponse, String> {
     google_login(app, state).await
 }
 
@@ -347,7 +506,12 @@ pub async fn google_oauth_logout(
     app: AppHandle,
     state: State<'_, AuthState>,
 ) -> Result<(), String> {
-    let token = state.access_token.lock().unwrap().take();
+    let token = state
+        .access_token
+        .lock()
+        .map_err(|e| format!("Failed to lock access_token: {}", e))?
+        .take();
+
     if let Some(t) = token {
         let client = reqwest::Client::new();
         let _ = client
@@ -357,14 +521,18 @@ pub async fn google_oauth_logout(
             .await;
     }
 
-    let app_dir = app.path().app_data_dir().ok();
-    clear_auth_state_and_vault(app_dir.as_deref(), &state);
-
+    clear_auth_state_and_store(Some(&app), &state);
     Ok(())
 }
 
 #[tauri::command]
-pub async fn google_get_current_user(state: State<'_, AuthState>) -> Result<Option<UserProfile>, String> {
-    let user = state.user_profile.lock().unwrap().clone();
+pub async fn google_get_current_user(
+    state: State<'_, AuthState>,
+) -> Result<Option<AuthResponse>, String> {
+    let user = state
+        .user_profile
+        .lock()
+        .map_err(|e| format!("Failed to lock user_profile: {}", e))?
+        .clone();
     Ok(user)
 }

@@ -6,7 +6,7 @@ use pbkdf2::pbkdf2_hmac;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::db::{db_export_all, db_import_all, DatabaseManager};
 use crate::oauth::{get_valid_access_token, refresh_google_access_token, AuthState};
@@ -133,6 +133,7 @@ async fn find_drive_backup_file(token: &str) -> Result<Option<String>, String> {
 
 #[tauri::command]
 pub async fn drive_push_backup(
+    app: AppHandle,
     google_id: String,
     auth_state: State<'_, AuthState>,
     db_state: State<'_, DatabaseManager>,
@@ -141,7 +142,7 @@ pub async fn drive_push_backup(
         return Err("Invalid Google User ID".into());
     }
 
-    let mut token = get_valid_access_token(&auth_state).await?;
+    let mut token = get_valid_access_token(Some(&app), &auth_state).await?;
 
     let full_snapshot = db_export_all(db_state.clone()).await?;
     let payload = serde_json::json!({
@@ -154,17 +155,21 @@ pub async fn drive_push_backup(
 
     let encrypted_bytes = encrypt_payload(&payload.to_string(), &google_id)?;
 
-    let mut file_id = auth_state.drive_file_id.lock().unwrap().clone();
+    let mut file_id = auth_state
+        .drive_file_id
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     if file_id.is_none() {
         match find_drive_backup_file(&token).await {
             Ok(fid) => {
                 file_id = fid;
-                *auth_state.drive_file_id.lock().unwrap() = file_id.clone();
+                *auth_state.drive_file_id.lock().map_err(|e| e.to_string())? = file_id.clone();
             }
             Err(err) if err == "UNAUTHORIZED" => {
-                token = refresh_google_access_token(&auth_state).await?;
+                token = refresh_google_access_token(Some(&app), &auth_state).await?;
                 file_id = find_drive_backup_file(&token).await?;
-                *auth_state.drive_file_id.lock().unwrap() = file_id.clone();
+                *auth_state.drive_file_id.lock().map_err(|e| e.to_string())? = file_id.clone();
             }
             Err(err) => return Err(err),
         }
@@ -185,7 +190,7 @@ pub async fn drive_push_backup(
             .map_err(|e| format!("Upload error: {}", e))?;
 
         if res.status() == reqwest::StatusCode::UNAUTHORIZED {
-            token = refresh_google_access_token(&auth_state).await?;
+            token = refresh_google_access_token(Some(&app), &auth_state).await?;
             res = client
                 .patch(&url)
                 .header("Authorization", format!("Bearer {}", token))
@@ -238,7 +243,7 @@ pub async fn drive_push_backup(
             .await
             .map_err(|e| format!("Parse created file response: {}", e))?;
 
-        *auth_state.drive_file_id.lock().unwrap() = Some(created_file.id.clone());
+        *auth_state.drive_file_id.lock().map_err(|e| e.to_string())? = Some(created_file.id.clone());
         file_id = Some(created_file.id);
     }
 
@@ -252,6 +257,7 @@ pub async fn drive_push_backup(
 
 #[tauri::command]
 pub async fn drive_pull_backup(
+    app: AppHandle,
     google_id: String,
     auth_state: State<'_, AuthState>,
     db_state: State<'_, DatabaseManager>,
@@ -260,12 +266,12 @@ pub async fn drive_pull_backup(
         return Err("Invalid Google User ID".into());
     }
 
-    let mut token = get_valid_access_token(&auth_state).await?;
+    let mut token = get_valid_access_token(Some(&app), &auth_state).await?;
 
     let file_id = match find_drive_backup_file(&token).await {
         Ok(fid) => fid,
         Err(err) if err == "UNAUTHORIZED" => {
-            token = refresh_google_access_token(&auth_state).await?;
+            token = refresh_google_access_token(Some(&app), &auth_state).await?;
             find_drive_backup_file(&token).await?
         }
         Err(err) => return Err(err),

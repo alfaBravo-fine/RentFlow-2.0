@@ -26,24 +26,24 @@ export const LoginView: React.FC = () => {
 
     try {
       setStatusText('Opening your default browser for Google Sign-In...');
-      const profile = await tauriGoogleLogin();
+      const authResponse = await tauriGoogleLogin();
 
-      if (!profile || !profile.email) {
+      if (!authResponse || !authResponse.email) {
         throw new Error('Google sign-in returned an incomplete user profile.');
       }
 
       setStatusText('Authenticated! Checking Google Drive appDataFolder for encrypted backup...');
       try {
-        await tauriDrivePullBackup(profile.id);
+        await tauriDrivePullBackup(authResponse.id);
       } catch (e) {
         console.warn('[Desktop Backup Pull] Non-fatal backup check notice:', e);
       }
 
       setGoogleSession({
-        sub: profile.id,
-        email: profile.email,
-        name: profile.name || profile.email.split('@')[0],
-        picture: profile.picture,
+        sub: authResponse.id,
+        email: authResponse.email,
+        name: authResponse.name || authResponse.email.split('@')[0],
+        picture: authResponse.picture,
       });
     } catch (err: unknown) {
       console.error('[Desktop Sign-in Error]:', err);
@@ -52,6 +52,7 @@ export const LoginView: React.FC = () => {
           ? err
           : (err as { message?: string })?.message || 'Desktop Google OAuth loopback failed.';
       setAuthenticating(false, msg);
+      showToast({ type: 'error', message: msg });
     } finally {
       setStatusText(null);
     }

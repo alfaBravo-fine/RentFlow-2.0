@@ -71,7 +71,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   setAccessToken: () => {
-    // Raw OAuth tokens are strictly confined to the Rust backend & Stronghold vault
+    // Raw OAuth tokens are strictly confined to the Rust backend & Store persistence
     set({ accessToken: null });
   },
 

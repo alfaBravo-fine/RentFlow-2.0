@@ -274,27 +274,29 @@ export async function tauriGetAppDataPath(): Promise<string> {
 
 // --- Production Google OAuth (Desktop Loopback) ---
 
-export interface TauriUserProfile {
+export interface AuthResponse {
   id: string;
   email: string;
   name: string;
   picture?: string;
 }
 
-export async function tauriGoogleLogin(): Promise<TauriUserProfile> {
-  return invokeTauri<TauriUserProfile>('google_login');
+export type TauriUserProfile = AuthResponse;
+
+export async function tauriGoogleLogin(): Promise<AuthResponse> {
+  return invokeTauri<AuthResponse>('google_login');
 }
 
-export async function tauriGoogleOAuth(): Promise<TauriUserProfile> {
-  return invokeTauri<TauriUserProfile>('google_oauth');
+export async function tauriGoogleOAuth(): Promise<AuthResponse> {
+  return invokeTauri<AuthResponse>('google_oauth');
 }
 
 export async function tauriGoogleLogout(): Promise<void> {
   return invokeTauri<void>('google_oauth_logout');
 }
 
-export async function tauriGoogleGetCurrentUser(): Promise<TauriUserProfile | null> {
-  return invokeTauri<TauriUserProfile | null>('google_get_current_user');
+export async function tauriGoogleGetCurrentUser(): Promise<AuthResponse | null> {
+  return invokeTauri<AuthResponse | null>('google_get_current_user');
 }
 
 // --- Google Drive Sync (Push/Pull in Rust Backend) ---

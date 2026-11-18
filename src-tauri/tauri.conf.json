@@ -15,6 +15,7 @@
     },
     "windows": [
       {
+        "label": "main",
         "title": "RentFlow — Desktop Property & Rental Management",
         "width": 1280,
         "height": 800,
