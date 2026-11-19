@@ -12,6 +12,7 @@ import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Input, Select } from '../../components/ui/Input';
 import { Modal } from '../../components/ui/Modal';
+import { emitTourAction } from '../../hooks/useAppTour';
 import {
   Building2,
   Plus,
@@ -130,10 +131,6 @@ export const PropertiesView: React.FC = () => {
       showToast({ type: 'error', message: 'Property name is required!' });
       return;
     }
-    if (!propAddress.trim()) {
-      showToast({ type: 'error', message: 'Property address is required!' });
-      return;
-    }
 
     let latVal: number | null = null;
     let lngVal: number | null = null;
@@ -151,8 +148,8 @@ export const PropertiesView: React.FC = () => {
       if (!isNaN(parsedLng) && parsedLng >= -180 && parsedLng <= 180) lngVal = parsedLng;
     }
 
-    // Auto-geocode via OpenStreetMap Nominatim if coordinates were left blank
-    if (latVal === null || lngVal === null) {
+    // Auto-geocode via OpenStreetMap Nominatim if coordinates were left blank and an address/city was entered
+    if ((latVal === null || lngVal === null) && (propAddress.trim() || propCity.trim())) {
       setIsGeocoding(true);
       try {
         const autoCoords = await geocodeAddress(propAddress.trim(), propCity.trim(), pack.code);
@@ -212,6 +209,7 @@ export const PropertiesView: React.FC = () => {
     setPropNotes('');
     setPropLat('');
     setPropLng('');
+    emitTourAction('property-saved');
   };
 
   // Listen to DB mutations
@@ -315,6 +313,7 @@ export const PropertiesView: React.FC = () => {
 
     setUnits(db.getTable<Unit>('units').filter((u) => !u.deleted_at && !(u as any).deletedAt));
     setUnitName('');
+    emitTourAction('unit-saved');
   };
 
   const handleDeleteUnit = (u: Unit) => {
@@ -354,6 +353,7 @@ export const PropertiesView: React.FC = () => {
         <div className="flex gap-3">
           <Button
             variant="outline"
+            data-tour="add-unit-btn"
             onClick={() => {
               setUnitName('');
               setUnitRent('1850');
@@ -367,6 +367,7 @@ export const PropertiesView: React.FC = () => {
           </Button>
           <Button
             variant="primary"
+            data-tour="btn-add-property"
             onClick={() => {
               setPropName('');
               setPropAddress('');
@@ -755,18 +756,18 @@ export const PropertiesView: React.FC = () => {
         <form onSubmit={handleSaveProperty} className="space-y-4">
           <Input
             label="Property Name *"
+            data-tour="input-property-name"
             value={propName}
             onChange={(e) => setPropName(e.target.value)}
-            placeholder="e.g. Oak Ridge Executive Apartments"
+            placeholder="e.g. My First Building"
             required
           />
 
           <Input
-            label="Street Address Line 1 *"
+            label="Street Address Line 1"
             value={propAddress}
             onChange={(e) => setPropAddress(e.target.value)}
-            placeholder="Full street address"
-            required
+            placeholder="Full street address (optional)"
           />
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -845,7 +846,7 @@ export const PropertiesView: React.FC = () => {
             >
               Cancel
             </Button>
-            <Button type="submit" variant="primary">
+            <Button type="submit" variant="primary" data-tour="btn-save-property">
               {editingProp ? 'Update Property' : 'Create Property'}
             </Button>
           </div>
@@ -875,6 +876,7 @@ export const PropertiesView: React.FC = () => {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input
               label={`Monthly Rent (${pack.currency.code}) *`}
+              data-tour="unit-rent-input"
               type="number"
               value={unitRent}
               onChange={(e) => setUnitRent(e.target.value)}
@@ -924,7 +926,7 @@ export const PropertiesView: React.FC = () => {
             >
               Cancel
             </Button>
-            <Button type="submit" variant="primary">
+            <Button type="submit" variant="primary" data-tour="save-unit-btn">
               {editingUnit ? 'Save Unit Changes' : 'Create Unit'}
             </Button>
           </div>

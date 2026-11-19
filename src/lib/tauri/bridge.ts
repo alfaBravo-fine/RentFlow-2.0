@@ -320,3 +320,32 @@ export async function tauriDrivePushBackup(googleId: string): Promise<TauriSyncR
 export async function tauriDrivePullBackup(googleId: string): Promise<TauriPullResult> {
   return invokeTauri<TauriPullResult>('drive_pull_backup', { googleId });
 }
+
+// --- Desktop Autostart (tauri-plugin-autostart) ---
+
+export async function tauriGetAutostartEnabled(): Promise<boolean> {
+  if (!isTauri()) return false;
+  const { isEnabled } = await import('@tauri-apps/plugin-autostart');
+  return await isEnabled();
+}
+
+export async function tauriSetAutostartEnabled(enabled: boolean): Promise<boolean> {
+  if (!isTauri()) return enabled;
+  const { enable, disable, isEnabled } = await import('@tauri-apps/plugin-autostart');
+  if (enabled) {
+    await enable();
+  } else {
+    await disable();
+  }
+  return await isEnabled();
+}
+
+export async function tauriRestartApp(): Promise<void> {
+  if (!isTauri()) {
+    if (typeof window !== 'undefined') {
+      window.location.reload();
+    }
+    return;
+  }
+  await invokeTauri<void>('restart_app');
+}

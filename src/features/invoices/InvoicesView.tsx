@@ -472,7 +472,7 @@ export const InvoicesView: React.FC = () => {
       })()}
 
       {/* Invoices List Table with 56px Row Height */}
-      <Card className="p-0 overflow-hidden">
+      <Card className="p-0 overflow-hidden" data-tour="invoice-list">
         <div className="p-6 border-b border-[var(--border-subtle)] flex items-center justify-between gap-3">
           <div className="min-w-0">
             <h3 className="text-base font-bold text-[var(--text-primary)] tracking-tight truncate">

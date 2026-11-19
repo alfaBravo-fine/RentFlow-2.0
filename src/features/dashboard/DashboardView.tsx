@@ -371,7 +371,10 @@ export const DashboardView: React.FC = () => {
       )}
 
       {/* Key Metrics Cards Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6 gap-4 w-full max-w-full">
+      <div
+        data-tour="dashboard-kpis"
+        className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6 gap-4 w-full max-w-full"
+      >
         {/* Metric 1: Total Properties */}
         <Card className="space-y-3 min-w-0">
           <div className="flex items-center justify-between gap-2">

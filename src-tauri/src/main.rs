@@ -27,15 +27,35 @@ use auth::{
 use std::fs;
 use tauri::Manager;
 
+#[tauri::command]
+fn restart_app(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        app.restart();
+    });
+}
+
 fn main() {
     eprintln!("[RentFlow Tauri] Starting main() application entrypoint...");
     dotenvy::dotenv().ok();
 
     let run_result = tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(tauri_plugin_oauth::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            if let Some(main_window) = app.get_webview_window("main") {
+                if let Some(icon) = app.default_window_icon() {
+                    if let Err(err) = main_window.set_icon(icon.clone()) {
+                        eprintln!("[RentFlow Tauri] Warning: failed to apply main window icon: {}", err);
+                    }
+                }
+            }
+
             if let Err(e) = (|| -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("[RentFlow Tauri] Initializing SQLite DB & Store...");
                 let app_data_dir = app
@@ -141,6 +161,8 @@ fn main() {
             // Google Drive Rust Sync
             drive_push_backup,
             drive_pull_backup,
+            // App Lifecycle
+            restart_app,
         ])
         .run({
             eprintln!("[RentFlow Tauri] Running Tauri window builder and event loop...");

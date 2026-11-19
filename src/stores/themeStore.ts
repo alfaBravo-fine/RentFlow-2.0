@@ -3,12 +3,17 @@ import { create } from 'zustand';
 export type ThemeMode = 'light' | 'dark';
 
 export type ColorPalette =
-  | 'midnight'
-  | 'slate_emerald'
-  | 'obsidian'
   | 'classic'
+  | 'white_rose'
+  | 'white_sage'
+  | 'ethereal_glass'
   | 'warm_sand'
-  | 'arctic_blue';
+  | 'arctic_blue'
+  | 'midnight'
+  | 'slate_grey'
+  | 'slate_emerald'
+  | 'oled_black'
+  | 'obsidian';
 
 export interface ThemeConfig {
   mode: ThemeMode;
@@ -19,6 +24,8 @@ export interface ThemeMeta {
   id: ColorPalette;
   name: string;
   category: 'dark' | 'light';
+  supportsBothModes?: boolean;
+  isGlass?: boolean;
   description: string;
   accentLabel: string;
   colors: {
@@ -31,7 +38,122 @@ export interface ThemeMeta {
 }
 
 export const THEME_PALETTES: ThemeMeta[] = [
-  // Dark Themes
+  // Light & Minimalist Themes
+  {
+    id: 'classic',
+    name: 'Classic',
+    category: 'light',
+    description: 'Clean neutral canvas, crisp white cards, high-contrast slate text, Indigo accent.',
+    accentLabel: 'Indigo',
+    colors: {
+      bg: '#f8fafc',
+      surface: '#ffffff',
+      text: '#0f172a',
+      accent: '#4f46e5',
+      border: '#e2e8f0',
+    },
+  },
+  {
+    id: 'white_rose',
+    name: 'White / Rose',
+    category: 'light',
+    description: 'Clean white surfaces with soft, refined non-neon Rose accents.',
+    accentLabel: 'Soft Rose',
+    colors: {
+      bg: '#fdfbfc',
+      surface: '#ffffff',
+      text: '#18181b',
+      accent: '#be4b69',
+      border: '#f0e5e8',
+    },
+  },
+  {
+    id: 'white_sage',
+    name: 'White / Sage',
+    category: 'light',
+    description: 'Crisp white background paired with calm, natural Sage green accents.',
+    accentLabel: 'Sage',
+    colors: {
+      bg: '#fafcfb',
+      surface: '#ffffff',
+      text: '#18181b',
+      accent: '#4b7a5e',
+      border: '#e2ebe5',
+    },
+  },
+  {
+    id: 'ethereal_glass',
+    name: 'Ethereal Glass',
+    category: 'light',
+    supportsBothModes: true,
+    isGlass: true,
+    description: 'Translucent frosted glass cards and sidebars with backdrop blur and crisp opaque text.',
+    accentLabel: 'Frosted Indigo',
+    colors: {
+      bg: '#e9eef6',
+      surface: 'rgba(255, 255, 255, 0.6)',
+      text: '#0f172a',
+      accent: '#4f46e5',
+      border: 'rgba(148, 163, 184, 0.35)',
+    },
+  },
+  {
+    id: 'warm_sand',
+    name: 'Warm Sand',
+    category: 'light',
+    description: 'Soft off-white #FAFAF7 background, warm stone surfaces, terracotta accent.',
+    accentLabel: 'Terracotta',
+    colors: {
+      bg: '#fafaf7',
+      surface: '#ffffff',
+      text: '#292524',
+      accent: '#c2410c',
+      border: '#e7e5dc',
+    },
+  },
+  {
+    id: 'arctic_blue',
+    name: 'Arctic Blue',
+    category: 'light',
+    description: 'Pale sky canvas, clean white surfaces, slate text, cool blue accent.',
+    accentLabel: 'Cool Blue',
+    colors: {
+      bg: '#f0f7ff',
+      surface: '#ffffff',
+      text: '#0f172a',
+      accent: '#0284c7',
+      border: '#d0e4ff',
+    },
+  },
+  // Dark & Comfort Themes
+  {
+    id: 'oled_black',
+    name: 'Pure Black (OLED)',
+    category: 'dark',
+    description: 'True #000000 OLED canvas, #111111 elevated cards, and crisp white text.',
+    accentLabel: 'Pure White / Indigo',
+    colors: {
+      bg: '#000000',
+      surface: '#111111',
+      text: '#ffffff',
+      accent: '#6366f1',
+      border: '#242424',
+    },
+  },
+  {
+    id: 'slate_grey',
+    name: 'Slate Grey',
+    category: 'dark',
+    description: 'Muted, low-glare neutral grey workspace engineered for long working hours.',
+    accentLabel: 'Muted Slate',
+    colors: {
+      bg: '#1f2228',
+      surface: '#282c34',
+      text: '#e6e8ec',
+      accent: '#6b8afd',
+      border: '#383d47',
+    },
+  },
   {
     id: 'midnight',
     name: 'Midnight',
@@ -50,7 +172,7 @@ export const THEME_PALETTES: ThemeMeta[] = [
     id: 'slate_emerald',
     name: 'Slate & Emerald',
     category: 'dark',
-    description: 'Dark blue-gray background, muted teal/emerald accents, very professional.',
+    description: 'Dark blue-gray background with muted teal and emerald accents.',
     accentLabel: 'Emerald',
     colors: {
       bg: '#0b1320',
@@ -62,9 +184,9 @@ export const THEME_PALETTES: ThemeMeta[] = [
   },
   {
     id: 'obsidian',
-    name: 'Obsidian',
+    name: 'Obsidian Violet',
     category: 'dark',
-    description: 'Pure black #000000 background, dark gray cards, bright white text, subtle violet accent.',
+    description: 'Deep #000000 canvas, dark charcoal cards, bright white text, violet accent.',
     accentLabel: 'Violet',
     colors: {
       bg: '#000000',
@@ -72,49 +194,6 @@ export const THEME_PALETTES: ThemeMeta[] = [
       text: '#ffffff',
       accent: '#8b5cf6',
       border: '#222226',
-    },
-  },
-  // Light Themes
-  {
-    id: 'classic',
-    name: 'Classic',
-    category: 'light',
-    description: 'Pure white background, light gray surfaces, crisp black text, Indigo accent.',
-    accentLabel: 'Indigo',
-    colors: {
-      bg: '#f8fafc',
-      surface: '#ffffff',
-      text: '#0f172a',
-      accent: '#4f46e5',
-      border: '#e2e8f0',
-    },
-  },
-  {
-    id: 'warm_sand',
-    name: 'Warm Sand',
-    category: 'light',
-    description: 'Soft off-white #FAFAF7 background, light beige cards, dark brown text, terracotta/amber accent.',
-    accentLabel: 'Terracotta',
-    colors: {
-      bg: '#fafaf7',
-      surface: '#f5f4ef',
-      text: '#292524',
-      accent: '#c2410c',
-      border: '#e5e2d6',
-    },
-  },
-  {
-    id: 'arctic_blue',
-    name: 'Arctic Blue',
-    category: 'light',
-    description: 'Very pale blue background, white cards, dark slate text, cool blue accent.',
-    accentLabel: 'Cool Blue',
-    colors: {
-      bg: '#f0f7ff',
-      surface: '#ffffff',
-      text: '#0f172a',
-      accent: '#0284c7',
-      border: '#d0e4ff',
     },
   },
 ];
@@ -161,12 +240,16 @@ const getInitialTheme = (): ThemeConfig => {
       }
     }
 
-    // Check legacy storage keys if present
     const legacyConfig = localStorage.getItem('rentflow_theme_config');
     if (legacyConfig) {
       const parsed = JSON.parse(legacyConfig);
       if (parsed && (parsed.mode === 'light' || parsed.mode === 'dark')) {
-        return { mode: parsed.mode, colorPalette: parsed.colorPalette || (parsed.mode === 'dark' ? 'midnight' : 'classic') };
+        const validPalette = THEME_PALETTES.some((p) => p.id === parsed.colorPalette)
+          ? parsed.colorPalette
+          : parsed.mode === 'dark'
+          ? 'midnight'
+          : 'classic';
+        return { mode: parsed.mode, colorPalette: validPalette };
       }
     }
 
@@ -188,7 +271,6 @@ interface ThemeState {
   toggleMode: () => void;
 }
 
-// Synchronously load and apply on startup (no flashing)
 const initialTheme = getInitialTheme();
 applyThemeToDOM(initialTheme.mode, initialTheme.colorPalette);
 
@@ -208,8 +290,8 @@ export const useThemeStore = create<ThemeState>((set) => ({
     set((state) => {
       let nextPalette = state.theme.colorPalette;
       const currentMeta = THEME_PALETTES.find((p) => p.id === nextPalette);
-      if (currentMeta && currentMeta.category !== mode) {
-        nextPalette = mode === 'dark' ? 'midnight' : 'classic';
+      if (currentMeta && !currentMeta.supportsBothModes && currentMeta.category !== mode) {
+        nextPalette = mode === 'dark' ? 'oled_black' : 'classic';
       }
       const nextConfig: ThemeConfig = { mode, colorPalette: nextPalette };
       persistAndApply(nextConfig);
@@ -220,7 +302,11 @@ export const useThemeStore = create<ThemeState>((set) => ({
   setColorPalette: (palette: ColorPalette) => {
     set((state) => {
       const paletteMeta = THEME_PALETTES.find((p) => p.id === palette);
-      const nextMode = paletteMeta ? paletteMeta.category : state.theme.mode;
+      const nextMode = paletteMeta
+        ? paletteMeta.supportsBothModes
+          ? state.theme.mode
+          : paletteMeta.category
+        : state.theme.mode;
       const nextConfig: ThemeConfig = { mode: nextMode, colorPalette: palette };
       persistAndApply(nextConfig);
       return { theme: nextConfig };
@@ -237,8 +323,8 @@ export const useThemeStore = create<ThemeState>((set) => ({
       const nextMode: ThemeMode = state.theme.mode === 'dark' ? 'light' : 'dark';
       let nextPalette = state.theme.colorPalette;
       const currentMeta = THEME_PALETTES.find((p) => p.id === nextPalette);
-      if (currentMeta && currentMeta.category !== nextMode) {
-        nextPalette = nextMode === 'dark' ? 'midnight' : 'classic';
+      if (currentMeta && !currentMeta.supportsBothModes && currentMeta.category !== nextMode) {
+        nextPalette = nextMode === 'dark' ? 'oled_black' : 'classic';
       }
       const nextConfig: ThemeConfig = { mode: nextMode, colorPalette: nextPalette };
       persistAndApply(nextConfig);

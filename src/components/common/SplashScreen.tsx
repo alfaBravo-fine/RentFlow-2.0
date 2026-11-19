@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Building2, ShieldCheck, Zap } from 'lucide-react';
+import { ShieldCheck, Zap } from 'lucide-react';
+import { Logo } from '../Logo';
 
 interface SplashScreenProps {
   onFinish?: () => void;
@@ -44,8 +45,8 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
               className="relative flex items-center justify-center"
             >
               <div className="absolute w-24 h-24 rounded-2xl bg-blue-500/20 animate-ping opacity-75" />
-              <div className="relative w-20 h-20 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-700 flex items-center justify-center shadow-2xl shadow-blue-500/30 border border-blue-400/20">
-                <Building2 className="w-10 h-10 text-white stroke-[2.2]" />
+              <div className="relative flex items-center justify-center shadow-2xl shadow-indigo-500/30 rounded-2xl">
+                <Logo size={80} />
               </div>
             </motion.div>
 

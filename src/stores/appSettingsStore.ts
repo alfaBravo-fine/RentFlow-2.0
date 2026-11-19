@@ -31,6 +31,7 @@ export interface AppSettingsData {
   leaseChecklists: Record<string, ChecklistItem[]>;
   mapPosition: MapPositionState | null;
   autoSyncEnabled: boolean;
+  launchAtStartup: boolean;
   exportDestination: string;
   agencyCommissionPct: number;
   maintenanceApprovalThresholdMinor: number;
@@ -47,6 +48,7 @@ interface AppSettingsStore extends AppSettingsData {
   getLeaseChecklist: (leaseId: string) => ChecklistItem[] | undefined;
   setMapPosition: (pos: MapPositionState | null) => void;
   setAutoSyncEnabled: (enabled: boolean) => void;
+  setLaunchAtStartup: (enabled: boolean) => void;
   setExportDestination: (dest: string) => void;
   setAgencyCommissionPct: (pct: number) => void;
   setMaintenanceApprovalThresholdMinor: (minor: number) => void;
@@ -91,6 +93,7 @@ function createDefaultState(): AppSettingsData {
     leaseChecklists: {},
     mapPosition: null,
     autoSyncEnabled: true,
+    launchAtStartup: false,
     exportDestination: 'C:\\Users\\Documents\\RentFlowExports',
     agencyCommissionPct: 8,
     maintenanceApprovalThresholdMinor: 50000,
@@ -199,6 +202,7 @@ function extractData(s: AppSettingsStore): AppSettingsData {
     leaseChecklists: s.leaseChecklists,
     mapPosition: s.mapPosition,
     autoSyncEnabled: s.autoSyncEnabled,
+    launchAtStartup: s.launchAtStartup,
     exportDestination: s.exportDestination,
     agencyCommissionPct: s.agencyCommissionPct,
     maintenanceApprovalThresholdMinor: s.maintenanceApprovalThresholdMinor,
@@ -251,6 +255,11 @@ export const useAppSettingsStore = create<AppSettingsStore>((set, get) => ({
 
   setAutoSyncEnabled: (autoSyncEnabled) => {
     set({ autoSyncEnabled });
+    persistSettings(extractData(get()));
+  },
+
+  setLaunchAtStartup: (launchAtStartup) => {
+    set({ launchAtStartup });
     persistSettings(extractData(get()));
   },
 

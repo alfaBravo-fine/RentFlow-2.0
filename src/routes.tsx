@@ -1,5 +1,5 @@
 import React from 'react';
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import { DashboardView } from './features/dashboard/DashboardView';
 import { OnboardingView } from './features/onboarding/OnboardingView';
 import { PropertiesView } from './features/properties/PropertiesView';
@@ -17,6 +17,10 @@ import { DocumentsView } from './features/documents/DocumentsView';
 import { OwnersView } from './features/owners/OwnersView';
 import { SyncView } from './features/sync/SyncView';
 import { SettingsView } from './features/settings/SettingsView';
+import { SettingsGeneral } from './features/settings/SettingsGeneral';
+import { SettingsAppearance } from './features/settings/SettingsAppearance';
+import { SettingsData } from './features/settings/SettingsData';
+import { SettingsAbout } from './features/settings/SettingsAbout';
 import { CalendarView } from './features/calendar/CalendarView';
 
 export const AppRoutes: React.FC = () => {
@@ -39,7 +43,14 @@ export const AppRoutes: React.FC = () => {
       <Route path="/owners" element={<OwnersView />} />
       <Route path="/reports" element={<ReportsView />} />
       <Route path="/sync" element={<SyncView />} />
-      <Route path="/settings" element={<SettingsView />} />
+      <Route path="/settings" element={<SettingsView />}>
+        <Route index element={<Navigate to="general" replace />} />
+        <Route path="general" element={<SettingsGeneral />} />
+        <Route path="appearance" element={<SettingsAppearance />} />
+        <Route path="data" element={<SettingsData />} />
+        <Route path="about" element={<SettingsAbout />} />
+        <Route path="*" element={<Navigate to="general" replace />} />
+      </Route>
       <Route path="*" element={<DashboardView />} />
     </Routes>
   );

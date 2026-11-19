@@ -11,6 +11,7 @@ import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Input, Select } from '../../components/ui/Input';
 import { Modal } from '../../components/ui/Modal';
+import { emitTourAction } from '../../hooks/useAppTour';
 import {
   Users,
   Plus,
@@ -132,14 +133,6 @@ export const TenantsView: React.FC = () => {
       showToast({ type: 'error', message: 'Tenant name is required!' });
       return;
     }
-    if (!phone.trim()) {
-      showToast({ type: 'error', message: 'Tenant phone number is required!' });
-      return;
-    }
-    if (!idNumber.trim()) {
-      showToast({ type: 'error', message: 'Identity document number is required!' });
-      return;
-    }
 
     if (editingTenant) {
       db.updateItem<Tenant>('tenants', editingTenant.id, {
@@ -169,6 +162,7 @@ export const TenantsView: React.FC = () => {
 
     setTenants(db.getTable<Tenant>('tenants').filter((t) => !t.deleted_at && !(t as any).deletedAt));
     setIsModalOpen(false);
+    emitTourAction('tenant-saved');
   };
 
   const handleConfirmDeleteTenant = () => {
@@ -253,7 +247,7 @@ export const TenantsView: React.FC = () => {
             </button>
           </div>
 
-          <Button variant="primary" onClick={handleOpenAdd} className="gap-2">
+          <Button variant="primary" data-tour="btn-add-tenant" onClick={handleOpenAdd} className="gap-2">
             <UserPlus className="w-4 h-4" />
             <span>Add Tenant</span>
           </Button>
@@ -320,7 +314,9 @@ export const TenantsView: React.FC = () => {
                         </div>
                         <p className="text-xs text-[var(--text-secondary)] flex items-center gap-1 mt-0.5 truncate">
                           <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                          <span className="truncate">{t.id_type}: {t.id_number}</span>
+                          <span className="truncate">
+                            {t.id_number ? `${t.id_type}: ${t.id_number}` : `${t.id_type}: Pending`}
+                          </span>
                         </p>
                       </div>
                     </div>
@@ -374,15 +370,17 @@ export const TenantsView: React.FC = () => {
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <Phone className="w-3.5 h-3.5 text-[var(--text-subtle)] shrink-0" />
-                        <span className="font-mono">{t.phone}</span>
+                        <span className="font-mono">{t.phone || 'No phone on file'}</span>
                       </div>
-                      <button
-                        onClick={() => handleCopyPhone(t.phone, t.name)}
-                        className="text-[11px] text-[var(--accent)] hover:underline flex items-center gap-1 cursor-pointer"
-                      >
-                        <Copy className="w-3 h-3" />
-                        <span>Copy</span>
-                      </button>
+                      {t.phone && (
+                        <button
+                          onClick={() => handleCopyPhone(t.phone, t.name)}
+                          className="text-[11px] text-[var(--accent)] hover:underline flex items-center gap-1 cursor-pointer"
+                        >
+                          <Copy className="w-3 h-3" />
+                          <span>Copy</span>
+                        </button>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -437,13 +435,19 @@ export const TenantsView: React.FC = () => {
                         {t.name}
                       </td>
                       <td className="py-3 px-6 font-mono text-xs text-[var(--text-secondary)]">
-                        {t.phone}
+                        {t.phone || '—'}
                       </td>
                       <td className="py-3 px-6 text-xs text-[var(--text-secondary)] truncate max-w-[200px]">
                         {t.email || '—'}
                       </td>
                       <td className="py-3 px-6 text-xs text-[var(--text-secondary)]">
-                        {t.id_type}: <span className="font-mono">{t.id_number}</span>
+                        {t.id_number ? (
+                          <>
+                            {t.id_type}: <span className="font-mono">{t.id_number}</span>
+                          </>
+                        ) : (
+                          <span className="text-[var(--text-subtle)]">Pending verification</span>
+                        )}
                       </td>
                       <td className="py-3 px-6">
                         <Badge variant={tenantLease ? 'success' : 'neutral'}>
@@ -666,32 +670,32 @@ export const TenantsView: React.FC = () => {
         <form onSubmit={handleSaveTenant} className="space-y-4">
           <Input
             label="Full Legal Name *"
+            data-tour="input-tenant-name"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Eleanor Vance"
+            placeholder="e.g. John Doe"
             required
           />
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input
-              label="Phone Number *"
+              label="Phone Number"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               placeholder="e.g. +1 555-0144"
-              required
             />
             <Input
               label="Email Address"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="e.g. eleanor.vance@example.com"
+              placeholder="e.g. john.doe@example.com"
             />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Select
-              label="Identity Document Type *"
+              label="Identity Document Type"
               value={idType}
               onChange={(e) => setIdType(e.target.value)}
             >
@@ -702,11 +706,10 @@ export const TenantsView: React.FC = () => {
             </Select>
 
             <Input
-              label="ID Document Number *"
+              label="ID Document Number"
               value={idNumber}
               onChange={(e) => setIdNumber(e.target.value)}
               placeholder="e.g. DL-982310492"
-              required
             />
           </div>
 
@@ -715,7 +718,7 @@ export const TenantsView: React.FC = () => {
               label="Emergency Contact Name"
               value={emergencyName}
               onChange={(e) => setEmergencyName(e.target.value)}
-              placeholder="e.g. Robert Vance (Spouse)"
+              placeholder="e.g. Jane Doe (Spouse)"
             />
             <Input
               label="Occupants Count"
@@ -729,7 +732,7 @@ export const TenantsView: React.FC = () => {
             <Button type="button" variant="outline" onClick={() => setIsModalOpen(false)}>
               Cancel
             </Button>
-            <Button type="submit" variant="primary">
+            <Button type="submit" variant="primary" data-tour="btn-save-tenant">
               {editingTenant ? 'Save Tenant Changes' : 'Register Tenant'}
             </Button>
           </div>

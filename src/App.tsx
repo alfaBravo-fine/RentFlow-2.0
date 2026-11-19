@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { HashRouter } from 'react-router-dom';
+import { MotionConfig } from 'motion/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Layout } from './components/layout/Layout';
 import { AppRoutes } from './routes';
 import { LoginView } from './features/auth/LoginView';
 import { AuthProvider, useAuth } from './features/auth/AuthProvider';
-import { seedInitialData } from './db/seed';
 import { ToastProvider } from './components/toast/ToastContext';
 import { ThemeProvider } from './components/theme/ThemeProvider';
 import { initAutomatedLateFeeSchedule } from './lib/autoLateFeeEngine';
@@ -86,7 +86,6 @@ function AuthenticatedContent() {
     (async () => {
       try {
         await databaseService.initialize();
-        seedInitialData(false);
         cleanupLateFees = initAutomatedLateFeeSchedule();
       } catch (err) {
         console.warn('[App] Database initialization notice:', err);
@@ -146,20 +145,22 @@ function AppShell() {
 
 export default function App() {
   return (
-    <HashRouter>
-      <SplashScreen durationMs={1500} />
-      <AppErrorBoundary>
-        <ThemeProvider>
-          <ToastProvider>
-            <AuthProvider>
-              <PrintProvider>
-                <AppShell />
-              </PrintProvider>
-            </AuthProvider>
-          </ToastProvider>
-        </ThemeProvider>
-      </AppErrorBoundary>
-      <div id="print-root" className="hidden bg-white text-black"></div>
-    </HashRouter>
+    <MotionConfig reducedMotion="user">
+      <HashRouter>
+        <SplashScreen durationMs={1500} />
+        <AppErrorBoundary>
+          <ThemeProvider>
+            <ToastProvider>
+              <AuthProvider>
+                <PrintProvider>
+                  <AppShell />
+                </PrintProvider>
+              </AuthProvider>
+            </ToastProvider>
+          </ThemeProvider>
+        </AppErrorBoundary>
+        <div id="print-root" className="hidden bg-white text-black"></div>
+      </HashRouter>
+    </MotionConfig>
   );
 }

@@ -11,6 +11,7 @@ import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Input, Select } from '../../components/ui/Input';
 import { Modal } from '../../components/ui/Modal';
+import { emitTourAction } from '../../hooks/useAppTour';
 import {
   Wrench,
   Plus,
@@ -79,6 +80,7 @@ export const MaintenanceView: React.FC = () => {
     setIsAddOpen(false);
     setDescription('');
     showToast({ type: 'success', message: 'New maintenance request logged' });
+    emitTourAction('work-order-saved');
   };
 
   const handleAssignVendor = (e: React.FormEvent) => {
@@ -183,7 +185,7 @@ export const MaintenanceView: React.FC = () => {
             Work order lifecycle &bull; Contractor assignment &bull; Expense attribution
           </p>
         </div>
-        <Button variant="primary" onClick={() => setIsAddOpen(true)} className="gap-2">
+        <Button variant="primary" data-tour="new-work-order-btn" onClick={() => setIsAddOpen(true)} className="gap-2">
           <Plus className="w-4 h-4" />
           <span>New Work Order</span>
         </Button>
@@ -388,6 +390,7 @@ export const MaintenanceView: React.FC = () => {
 
           <Input
             label="Issue Description *"
+            data-tour="issue-description-input"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Describe the issue in detail"
@@ -398,7 +401,7 @@ export const MaintenanceView: React.FC = () => {
             <Button type="button" variant="outline" onClick={() => setIsAddOpen(false)}>
               Cancel
             </Button>
-            <Button type="submit" variant="primary">
+            <Button type="submit" variant="primary" data-tour="save-work-order-btn">
               Create Work Request
             </Button>
           </div>

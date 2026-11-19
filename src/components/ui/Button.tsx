@@ -1,10 +1,12 @@
 import React from 'react';
+import { motion, type HTMLMotionProps } from 'motion/react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
-export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+export interface ButtonProps extends Omit<HTMLMotionProps<'button'>, 'children'> {
   variant?: 'primary' | 'secondary' | 'outline' | 'danger' | 'ghost';
   size?: 'sm' | 'md' | 'lg' | 'icon';
+  children?: React.ReactNode;
 }
 
 export const Button: React.FC<ButtonProps> = ({
@@ -16,7 +18,7 @@ export const Button: React.FC<ButtonProps> = ({
   ...props
 }) => {
   const baseClasses =
-    'inline-flex items-center justify-center font-medium transition-all duration-150 focus-ring disabled:opacity-50 disabled:pointer-events-none cursor-pointer select-none active:scale-[0.98]';
+    'inline-flex items-center justify-center font-medium transition-colors duration-150 focus-ring disabled:opacity-50 disabled:pointer-events-none cursor-pointer select-none whitespace-nowrap';
 
   const variantClasses = {
     primary:
@@ -39,12 +41,15 @@ export const Button: React.FC<ButtonProps> = ({
   };
 
   return (
-    <button
+    <motion.button
+      whileHover={!disabled && variant === 'primary' ? { scale: 1.02 } : undefined}
+      whileTap={!disabled ? { scale: 0.98 } : undefined}
+      transition={{ type: 'spring', stiffness: 450, damping: 28 }}
       className={twMerge(clsx(baseClasses, variantClasses[variant], sizeClasses[size], className))}
       disabled={disabled}
       {...props}
     >
       {children}
-    </button>
+    </motion.button>
   );
 };

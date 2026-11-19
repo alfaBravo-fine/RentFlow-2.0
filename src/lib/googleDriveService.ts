@@ -423,16 +423,31 @@ export async function restoreFromDrive(
 
   if (isTauri()) {
     const result = await tauriDrivePullBackup(gId);
+    let totalRecords = 0;
     if (result.restored) {
       const snapshot = await tauriDbExportAll();
+      await db.wipeAllDataAsync();
       await db.importAllDataAsync(snapshot, false);
+      applyRestoredSettingsAndThemes(snapshot);
+      totalRecords = Object.values(snapshot || {}).reduce(
+        (sum, rows) => sum + (Array.isArray(rows) ? rows.length : 0),
+        0
+      );
       const syncedAt = new Date().toISOString();
       useAppSettingsStore.getState().setLastDriveSync(syncedAt);
+      db.notifyWrite();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('rentflow:restored', {
+            detail: { totalRecords, timestamp: Date.now() },
+          })
+        );
+      }
     }
     return {
       restored: result.restored,
       message: result.message,
-      totalRecords: 0,
+      totalRecords,
     };
   }
 
@@ -507,7 +522,10 @@ export async function syncOnStartup(
       const res = await tauriDrivePullBackup(googleId);
       if (res.restored) {
         const snapshot = await tauriDbExportAll();
+        await db.wipeAllDataAsync();
         await db.importAllDataAsync(snapshot, false);
+        applyRestoredSettingsAndThemes(snapshot);
+        db.notifyWrite();
       }
       return res;
     }

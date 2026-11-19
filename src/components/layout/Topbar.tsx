@@ -1,5 +1,6 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { motion } from 'motion/react';
 import {
   Search,
   Sun,
@@ -31,6 +32,7 @@ import { useDriveSync } from '../../hooks/useDriveSync';
 import { useToast } from '../toast/ToastContext';
 import { CommandPalette } from './CommandPalette';
 import { QuickCopyPanel } from './QuickCopyPanel';
+import { Logo } from '../Logo';
 import { db } from '../../db/client';
 import { Lease, MaintenanceRequest, Tenant, Unit, DocumentVaultItem } from '../../db/schema';
 import { formatLeaseName } from '../../lib/formatNames';
@@ -173,7 +175,7 @@ export const Topbar: React.FC<TopbarProps> = ({ isDarkMode, onToggleTheme, onOpe
             >
               <Menu className="w-5 h-5" />
             </button>
-            <img src="./assets/icon.png" alt="RentFlow" className="w-7 h-7 object-contain" />
+            <Logo size={28} />
           </div>
 
           {/* Global Search Input Bar (Linear style) */}
@@ -205,14 +207,17 @@ export const Topbar: React.FC<TopbarProps> = ({ isDarkMode, onToggleTheme, onOpe
         <div className="flex items-center gap-2 sm:gap-3">
           {/* Quick Actions Dropdown */}
           <div className="relative" ref={quickActionsRef}>
-            <button
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              transition={{ type: 'spring', stiffness: 450, damping: 28 }}
               onClick={() => setIsQuickActionOpen(!isQuickActionOpen)}
-              className="hidden sm:flex items-center gap-1.5 px-3.5 h-[42px] rounded-xl bg-[var(--accent)] text-white text-xs font-medium hover:bg-[var(--accent-hover)] transition-all shadow-xs cursor-pointer active:scale-[0.98]"
+              className="hidden sm:flex items-center gap-1.5 px-3.5 h-[42px] rounded-xl bg-[var(--accent)] text-white text-xs font-medium hover:bg-[var(--accent-hover)] transition-colors shadow-xs cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
               <span>Create</span>
               <ChevronDown className="w-3 h-3 opacity-80 ml-0.5" />
-            </button>
+            </motion.button>
 
             {isQuickActionOpen && (
               <div className="absolute right-0 mt-2 w-48 rounded-2xl bg-[var(--bg-surface)] border border-[var(--border-strong)] modal-shadow py-2 z-50 animate-in fade-in zoom-in-95 duration-150">
@@ -488,6 +493,7 @@ export const Topbar: React.FC<TopbarProps> = ({ isDarkMode, onToggleTheme, onOpe
           {/* Theme Toggle */}
           <button
             onClick={onToggleTheme}
+            data-tour="theme-toggle"
             className="w-9 h-9 rounded-full flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-base)] hover:text-[var(--text-primary)] transition-colors focus-ring cursor-pointer"
             title="Toggle color theme"
           >

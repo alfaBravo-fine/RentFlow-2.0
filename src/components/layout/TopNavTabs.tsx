@@ -1,10 +1,12 @@
 import React, { useState, useRef } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
+import { motion } from 'motion/react';
 import { useTheme } from '../theme/ThemeProvider';
 import { useUIStore } from '../../stores/uiStore';
 import { useAuthStore } from '../../stores/authStore';
 import { CommandPalette } from './CommandPalette';
 import { QuickCopyPanel } from './QuickCopyPanel';
+import { Logo } from '../Logo';
 import {
   Home,
   Building2,
@@ -44,15 +46,15 @@ export const TopNavTabs: React.FC = () => {
   const [isQuickActionOpen, setIsQuickActionOpen] = useState(false);
   const quickActionsRef = useRef<HTMLDivElement>(null);
 
-  const navItems = [
+  const navItems: Array<{ to: string; label: string; icon: React.ComponentType<{ className?: string }>; tourId?: string }> = [
     { to: '/', label: 'Dashboard', icon: Home },
     { to: '/calendar', label: 'Calendar & Tasks', icon: Calendar },
-    { to: '/properties', label: 'Properties & Units', icon: Building2 },
+    { to: '/properties', label: 'Properties & Units', icon: Building2, tourId: 'sidebar-properties' },
     { to: '/map', label: 'Interactive Map', icon: Map },
-    { to: '/tenants', label: 'Tenants', icon: Users },
-    { to: '/leases', label: 'Leases', icon: FileText },
-    { to: '/invoices', label: 'Invoices & Rent', icon: Receipt },
-    { to: '/maintenance', label: 'Maintenance', icon: Wrench },
+    { to: '/tenants', label: 'Tenants', icon: Users, tourId: 'sidebar-tenants' },
+    { to: '/leases', label: 'Leases', icon: FileText, tourId: 'sidebar-leases' },
+    { to: '/invoices', label: 'Invoices & Rent', icon: Receipt, tourId: 'sidebar-invoicing' },
+    { to: '/maintenance', label: 'Maintenance', icon: Wrench, tourId: 'maintenance-tab' },
     { to: '/expenses', label: 'Expenses & Income', icon: Banknote },
     { to: '/utility-splitter', label: 'Utility Splitter', icon: Calculator },
     { to: '/area-calculator', label: 'Area Calculator', icon: Layers },
@@ -61,7 +63,7 @@ export const TopNavTabs: React.FC = () => {
     { to: '/owners', label: 'Owner Statements', icon: UserCheck },
     { to: '/reports', label: 'Reports', icon: BarChart3 },
     { to: '/sync', label: 'Drive Sync', icon: RefreshCw },
-    { to: '/settings', label: 'Settings', icon: Settings },
+    { to: '/settings', label: 'Settings', icon: Settings, tourId: 'settings-tab' },
   ];
 
   return (
@@ -70,11 +72,7 @@ export const TopNavTabs: React.FC = () => {
       <div className="flex items-center justify-between px-4 sm:px-8 h-16 border-b border-[var(--border-subtle)] gap-4">
         {/* Brand Header */}
         <div className="flex items-center gap-3 shrink-0">
-          <img
-            src="./assets/icon.png"
-            alt="RentFlow"
-            className="w-8 h-8 object-contain rounded-xl shrink-0 shadow-xs"
-          />
+          <Logo size={32} className="shadow-xs" />
           <div className="flex items-center gap-2">
             <span className="font-bold text-base tracking-tight text-[var(--text-primary)]">
               RentFlow
@@ -105,14 +103,17 @@ export const TopNavTabs: React.FC = () => {
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
           {/* Quick Create Dropdown */}
           <div className="relative" ref={quickActionsRef}>
-            <button
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              transition={{ type: 'spring', stiffness: 450, damping: 28 }}
               onClick={() => setIsQuickActionOpen(!isQuickActionOpen)}
-              className="flex items-center gap-1.5 px-3 h-9 rounded-xl bg-[var(--accent)] text-white text-xs font-medium hover:bg-[var(--accent-hover)] transition-all shadow-xs cursor-pointer active:scale-[0.98]"
+              className="flex items-center gap-1.5 px-3 h-9 rounded-xl bg-[var(--accent)] text-white text-xs font-medium hover:bg-[var(--accent-hover)] transition-colors shadow-xs cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Create</span>
               <ChevronDown className="w-3 h-3 opacity-80" />
-            </button>
+            </motion.button>
 
             {isQuickActionOpen && (
               <div className="absolute right-0 mt-2 w-48 rounded-2xl bg-[var(--bg-surface)] border border-[var(--border-strong)] modal-shadow py-2 z-50 animate-in fade-in zoom-in-95 duration-150">
@@ -173,6 +174,7 @@ export const TopNavTabs: React.FC = () => {
           {/* Theme Toggle */}
           <button
             onClick={toggleTheme}
+            data-tour="theme-toggle"
             className="w-9 h-9 rounded-xl border border-[var(--border-strong)] flex items-center justify-center text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-base)] transition-colors cursor-pointer"
             title="Toggle theme"
           >
@@ -201,16 +203,28 @@ export const TopNavTabs: React.FC = () => {
               key={item.to}
               to={item.to}
               end={item.to === '/'}
+              data-tour={item.tourId}
               className={({ isActive }) =>
-                `flex items-center gap-2 px-3 py-1.5 text-xs rounded-xl font-medium whitespace-nowrap transition-all duration-150 cursor-pointer ${
+                `relative flex items-center gap-2 px-3 py-1.5 text-xs rounded-xl font-medium whitespace-nowrap transition-colors duration-150 cursor-pointer ${
                   isActive
-                    ? 'bg-[var(--accent)] text-white shadow-xs font-semibold'
+                    ? 'text-white font-semibold'
                     : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-sunken)]'
                 }`
               }
             >
-              <Icon className="w-3.5 h-3.5 shrink-0" />
-              <span>{item.label}</span>
+              {({ isActive }) => (
+                <>
+                  {isActive && (
+                    <motion.div
+                      layoutId="top-tabs-active-pill"
+                      transition={{ type: 'spring', stiffness: 460, damping: 34 }}
+                      className="absolute inset-0 rounded-xl bg-[var(--accent)] shadow-xs pointer-events-none"
+                    />
+                  )}
+                  <Icon className="w-3.5 h-3.5 shrink-0 relative z-10" />
+                  <span className="relative z-10">{item.label}</span>
+                </>
+              )}
             </NavLink>
           );
         })}

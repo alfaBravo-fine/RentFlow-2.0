@@ -1,5 +1,7 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
+import { motion } from 'motion/react';
+import { Logo } from '../Logo';
 import { useAppSettingsStore } from '../../stores/appSettingsStore';
 import {
   Home,
@@ -33,28 +35,31 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpenMobile, onCloseMobile })
   const isCollapsed = useAppSettingsStore((s) => s.sidebarCollapsed);
   const toggleCollapse = useAppSettingsStore((s) => s.toggleSidebarCollapsed);
 
-  const navSections = [
+  const navSections: Array<{
+    category: string;
+    items: Array<{ to: string; label: string; icon: React.ComponentType<{ className?: string }>; tourId?: string }>;
+  }> = [
     {
       category: 'PROPERTY',
       items: [
         { to: '/', label: 'Dashboard', icon: Home },
-        { to: '/properties', label: 'Properties & Units', icon: Building2 },
+        { to: '/properties', label: 'Properties & Units', icon: Building2, tourId: 'sidebar-properties' },
         { to: '/map', label: 'Interactive Map', icon: Map },
-        { to: '/maintenance', label: 'Maintenance Board', icon: Wrench },
+        { to: '/maintenance', label: 'Maintenance Board', icon: Wrench, tourId: 'maintenance-tab' },
       ],
     },
     {
       category: 'PEOPLE',
       items: [
-        { to: '/tenants', label: 'Tenants Directory', icon: Users },
-        { to: '/leases', label: 'Leases & Deposits', icon: FileText },
+        { to: '/tenants', label: 'Tenants Directory', icon: Users, tourId: 'sidebar-tenants' },
+        { to: '/leases', label: 'Leases & Deposits', icon: FileText, tourId: 'sidebar-leases' },
         { to: '/vendors', label: 'Vendors', icon: HardHat },
       ],
     },
     {
       category: 'FINANCE',
       items: [
-        { to: '/invoices', label: 'Rent Roll & Invoicing', icon: Receipt },
+        { to: '/invoices', label: 'Rent Roll & Invoicing', icon: Receipt, tourId: 'sidebar-invoicing' },
         { to: '/utility-splitter', label: 'Utility Bill Splitter', icon: Calculator },
         { to: '/expenses', label: 'Expenses & Income', icon: Banknote },
         { to: '/owners', label: 'Owner Statements', icon: UserCheck },
@@ -68,7 +73,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpenMobile, onCloseMobile })
         { to: '/area-calculator', label: 'Land Calculator', icon: Layers },
         { to: '/documents', label: 'Document Vault', icon: Folder },
         { to: '/sync', label: 'Drive Sync', icon: RefreshCw },
-        { to: '/settings', label: 'Settings', icon: Settings },
+        { to: '/settings', label: 'Settings', icon: Settings, tourId: 'settings-tab' },
       ],
     },
   ];
@@ -94,11 +99,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpenMobile, onCloseMobile })
         {/* Brand Header */}
         <div className="h-16 flex items-center justify-between px-5 border-b border-[var(--border-subtle)]">
           <div className="flex items-center gap-3">
-            <img
-              src="./assets/icon.png"
-              alt="RentFlow"
-              className="w-8 h-8 object-contain rounded-xl shrink-0"
-            />
+            <motion.div
+              whileHover={{ scale: 1.06, rotate: -2 }}
+              whileTap={{ scale: 0.96 }}
+              transition={{ type: 'spring', stiffness: 420, damping: 24 }}
+              className="shrink-0 flex items-center justify-center rounded-lg shadow-xs cursor-pointer"
+            >
+              <Logo size={32} />
+            </motion.div>
             <div
               className={`flex flex-col transition-opacity duration-150 ${
                 isCollapsed ? 'md:hidden' : 'md:hidden lg:flex'
@@ -145,24 +153,36 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpenMobile, onCloseMobile })
                     end={item.to === '/'}
                     onClick={onCloseMobile}
                     title={item.label}
+                    data-tour={item.tourId}
                     className={({ isActive }) =>
-                      `flex items-center gap-3 px-3 py-2 rounded-xl text-xs transition-all duration-150 ${
+                      `relative flex items-center gap-3 px-3 py-2 rounded-xl text-xs transition-colors duration-150 ${
                         isCollapsed ? 'md:justify-center' : 'md:justify-center lg:justify-start'
                       } ${
                         isActive
-                          ? 'bg-[var(--accent)]/10 text-[var(--accent)] font-semibold shadow-xs'
+                          ? 'text-[var(--accent)] font-semibold'
                           : 'text-[var(--text-secondary)] hover:bg-[var(--bg-base)] hover:text-[var(--text-primary)] font-medium'
                       }`
                     }
                   >
-                    <Icon className="w-4 h-4 shrink-0" />
-                    <span
-                      className={`min-w-0 truncate ${
-                        isCollapsed ? 'md:hidden' : 'md:hidden lg:inline'
-                      }`}
-                    >
-                      {item.label}
-                    </span>
+                    {({ isActive }) => (
+                      <>
+                        {isActive && (
+                          <motion.div
+                            layoutId="sidebar-active-pill"
+                            transition={{ type: 'spring', stiffness: 460, damping: 34 }}
+                            className="absolute inset-0 rounded-xl bg-[var(--accent)]/12 border border-[var(--accent)]/15 shadow-xs pointer-events-none"
+                          />
+                        )}
+                        <Icon className="w-4 h-4 shrink-0 relative z-10" />
+                        <span
+                          className={`min-w-0 truncate relative z-10 ${
+                            isCollapsed ? 'md:hidden' : 'md:hidden lg:inline'
+                          }`}
+                        >
+                          {item.label}
+                        </span>
+                      </>
+                    )}
                   </NavLink>
                 );
               })}

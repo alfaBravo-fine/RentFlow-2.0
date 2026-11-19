@@ -1239,6 +1239,12 @@ pub async fn db_import_all(
     let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
 
+    // Strict Wipe Before Restore: delete existing rows from every table before inserting backup rows
+    for table in ALLOWED_TABLES {
+        let sql = format!("DELETE FROM {};", table);
+        tx.execute(&sql, []).map_err(|e| e.to_string())?;
+    }
+
     for (table, rows_val) in obj {
         if !ALLOWED_TABLES.contains(&table.as_str()) {
             continue;

@@ -2,7 +2,7 @@ import React from 'react';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { RefreshCw } from '../../components/icons';
-import { RentFlowLogo } from '../../components/brand/RentFlowLogo';
+import { Logo } from '../../components/Logo';
 import { useAuth } from './AuthProvider';
 
 export const LoginView: React.FC = () => {
@@ -12,9 +12,7 @@ export const LoginView: React.FC = () => {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--bg-base)] p-4 sm:p-6 overflow-y-auto">
       <div className="w-full max-w-sm space-y-6 text-center my-auto">
         <div className="flex flex-col items-center">
-          <div className="w-16 h-16 rounded-2xl bg-[var(--accent)] flex items-center justify-center shadow-md mb-4">
-            <RentFlowLogo size={36} className="text-white" />
-          </div>
+          <Logo size={64} className="shadow-md mb-4" />
           <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">
             RentFlow
           </h1>

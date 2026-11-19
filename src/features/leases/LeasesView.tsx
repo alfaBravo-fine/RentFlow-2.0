@@ -13,6 +13,7 @@ import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Input, Select } from '../../components/ui/Input';
 import { Modal } from '../../components/ui/Modal';
+import { emitTourAction } from '../../hooks/useAppTour';
 import {
   FileText,
   Plus,
@@ -41,8 +42,12 @@ export const LeasesView: React.FC = () => {
   const [leases, setLeases] = useState<Lease[]>(() =>
     db.getTable<Lease>('leases').filter((l) => !l.deleted_at && !(l as any).deletedAt)
   );
-  const tenants = db.getTable<Tenant>('tenants').filter((t) => !t.deleted_at && !(t as any).deletedAt);
-  const properties = db.getTable<Property>('properties').filter((p) => !p.deleted_at && !(p as any).deletedAt);
+  const [tenants, setTenants] = useState<Tenant[]>(() =>
+    db.getTable<Tenant>('tenants').filter((t) => !t.deleted_at && !(t as any).deletedAt)
+  );
+  const [properties, setProperties] = useState<Property[]>(() =>
+    db.getTable<Property>('properties').filter((p) => !p.deleted_at && !(p as any).deletedAt)
+  );
   const [units, setUnits] = useState<Unit[]>(() =>
     db.getTable<Unit>('units').filter((u) => !u.deleted_at && !(u as any).deletedAt)
   );
@@ -70,7 +75,9 @@ export const LeasesView: React.FC = () => {
     : vacantUnits;
 
   // Form states
-  const [unitId, setUnitId] = useState(vacantUnits[0]?.id || '');
+  const [unitId, setUnitId] = useState(
+    vacantUnits[0]?.id || (properties[0] ? `__auto_unit__:${properties[0].id}` : '')
+  );
   const [tenantId, setTenantId] = useState(tenants[0]?.id || '');
   const [startDate, setStartDate] = useState('2026-11-01');
   const [endDate, setEndDate] = useState('2027-10-31');
@@ -98,10 +105,12 @@ export const LeasesView: React.FC = () => {
     return () => window.removeEventListener('click', handleOutside);
   }, []);
 
-  // Subscribe to reactive DB writes so Leases, Units & Deposits stay synchronized
+  // Subscribe to reactive DB writes so Leases, Units, Tenants, Properties & Deposits stay synchronized
   useEffect(() => {
     const unsub = db.onWrite(() => {
       setLeases(db.getTable<Lease>('leases').filter((l) => !l.deleted_at && !(l as any).deletedAt));
+      setTenants(db.getTable<Tenant>('tenants').filter((t) => !t.deleted_at && !(t as any).deletedAt));
+      setProperties(db.getTable<Property>('properties').filter((p) => !p.deleted_at && !(p as any).deletedAt));
       setUnits(db.getTable<Unit>('units').filter((u) => !u.deleted_at && !(u as any).deletedAt));
       setDeposits(db.getTable<Deposit>('deposits').filter((d) => !d.deleted_at && !(d as any).deletedAt));
       setDepositDeductions(
@@ -114,7 +123,7 @@ export const LeasesView: React.FC = () => {
   const handleOpenAdd = () => {
     setEditingLease(null);
     const firstVacant = vacantUnits[0];
-    setUnitId(firstVacant?.id || '');
+    setUnitId(firstVacant?.id || (properties[0] ? `__auto_unit__:${properties[0].id}` : ''));
     setTenantId(tenants[0]?.id || '');
     setStartDate(new Date().toISOString().split('T')[0]);
     const nextYear = new Date();
@@ -172,14 +181,34 @@ export const LeasesView: React.FC = () => {
       return;
     }
 
+    let effectiveUnitId = unitId;
+    let resolvedUnit = units.find((u) => u.id === effectiveUnitId);
+
+    if (effectiveUnitId.startsWith('__auto_unit__:')) {
+      const targetPropId = effectiveUnitId.replace('__auto_unit__:', '');
+      const existingCount = units.filter((u) => u.property_id === targetPropId).length;
+      resolvedUnit = db.insertItem<Unit>('units', {
+        id: generateUUID(),
+        property_id: targetPropId,
+        name: `Unit ${existingCount + 1}`,
+        size: 850,
+        area_unit: pack.areaUnit,
+        bedrooms: 2,
+        bathrooms: 1,
+        rent_minor: rentMinor,
+        currency_code: pack.currency.code,
+        status: leaseStatus === 'active' ? 'occupied' : 'vacant',
+      });
+      effectiveUnitId = resolvedUnit.id;
+    }
+
     const selectedTenant = tenants.find((t) => t.id === tenantId);
-    const selectedUnit = units.find((u) => u.id === unitId);
-    const humanTitle = formatLeaseName(selectedTenant?.name, selectedUnit?.name);
+    const humanTitle = formatLeaseName(selectedTenant?.name, resolvedUnit?.name);
 
     if (editingLease) {
       const prevUnitId = editingLease.unit_id;
       const updatedLease = db.updateItem<Lease>('leases', editingLease.id, {
-        unit_id: unitId,
+        unit_id: effectiveUnitId,
         tenant_id: tenantId,
         start_date: startDate,
         end_date: endDate,
@@ -192,16 +221,16 @@ export const LeasesView: React.FC = () => {
 
       // Synchronize unit occupancy
       if (leaseStatus === 'active') {
-        db.updateItem<Unit>('units', unitId, { status: 'occupied' });
+        db.updateItem<Unit>('units', effectiveUnitId, { status: 'occupied' });
         try {
           generateFirstInvoice(updatedLease);
         } catch (err) {
           console.error('generateFirstInvoice failed during lease update:', err);
         }
       } else {
-        db.syncUnitOccupancy(unitId);
+        db.syncUnitOccupancy(effectiveUnitId);
       }
-      if (prevUnitId && prevUnitId !== unitId) {
+      if (prevUnitId && prevUnitId !== effectiveUnitId) {
         db.syncUnitOccupancy(prevUnitId);
       }
 
@@ -210,7 +239,7 @@ export const LeasesView: React.FC = () => {
       const leaseId = generateUUID();
       const savedLease = db.insertItem<Lease>('leases', {
         id: leaseId,
-        unit_id: unitId,
+        unit_id: effectiveUnitId,
         tenant_id: tenantId,
         start_date: startDate,
         end_date: endDate,
@@ -229,7 +258,7 @@ export const LeasesView: React.FC = () => {
 
       // Automatically update linked unit status
       if (leaseStatus === 'active') {
-        db.updateItem<Unit>('units', unitId, { status: 'occupied' });
+        db.updateItem<Unit>('units', effectiveUnitId, { status: 'occupied' });
 
         // Trigger First Invoice Generation immediately after the lease is saved
         try {
@@ -238,7 +267,7 @@ export const LeasesView: React.FC = () => {
           console.error('generateFirstInvoice failed during lease creation:', err);
         }
       } else {
-        db.syncUnitOccupancy(unitId);
+        db.syncUnitOccupancy(effectiveUnitId);
       }
 
       if (depMinor > 0) {
@@ -260,6 +289,7 @@ export const LeasesView: React.FC = () => {
     setLeases(db.getTable<Lease>('leases'));
     setDeposits(db.getTable<Deposit>('deposits'));
     setIsModalOpen(false);
+    emitTourAction('lease-saved');
   };
 
   const handleConfirmDelete = () => {
@@ -472,7 +502,7 @@ export const LeasesView: React.FC = () => {
             </button>
           </div>
 
-          <Button variant="primary" onClick={handleOpenAdd} className="gap-2">
+          <Button variant="primary" data-tour="btn-add-lease" onClick={handleOpenAdd} className="gap-2">
             <Plus className="w-4 h-4" />
             <span>Create Lease</span>
           </Button>
@@ -844,12 +874,21 @@ export const LeasesView: React.FC = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Select
                 label="Rental Unit *"
+                data-tour="select-unit-dropdown"
                 value={unitId}
                 onChange={(e) => handleUnitChange(e.target.value)}
                 required
               >
                 {selectableUnits.length === 0 ? (
-                  <option value="">No vacant units available</option>
+                  properties.length > 0 ? (
+                    properties.map((p) => (
+                      <option key={p.id} value={`__auto_unit__:${p.id}`}>
+                        {p.name} &bull; Unit 1 (Auto-create)
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">No vacant units available</option>
+                  )
                 ) : (
                   selectableUnits.map((u) => {
                     const prop = properties.find((p) => p.id === u.property_id);
@@ -864,13 +903,14 @@ export const LeasesView: React.FC = () => {
 
               <Select
                 label="Assigned Tenant *"
+                data-tour="select-tenant"
                 value={tenantId}
                 onChange={(e) => setTenantId(e.target.value)}
                 required
               >
                 {tenants.map((t) => (
                   <option key={t.id} value={t.id}>
-                    {t.name} ({t.phone})
+                    {t.phone ? `${t.name} (${t.phone})` : t.name}
                   </option>
                 ))}
               </Select>
@@ -963,7 +1003,7 @@ export const LeasesView: React.FC = () => {
             <Button type="button" variant="outline" onClick={() => setIsModalOpen(false)}>
               Cancel
             </Button>
-            <Button type="submit" variant="primary">
+            <Button type="submit" variant="primary" data-tour="btn-save-lease">
               {editingLease ? 'Save Lease Changes' : 'Create Lease Agreement'}
             </Button>
           </div>
