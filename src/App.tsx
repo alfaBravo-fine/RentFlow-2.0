@@ -14,7 +14,17 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { KeyboardShortcutsModal } from './components/layout/KeyboardShortcutsModal';
 import { PrintProvider } from './components/print/PrintContext';
 import { SplashScreen } from './components/common/SplashScreen';
+import { DATA_PATH_STORAGE_KEY } from './components/SetupWizard';
+import { ModeSelector } from './components/ModeSelector';
+import { StorageSelector } from './components/StorageSelector';
+import {
+  WelcomeRestoreScreen,
+  getCloudOnboardingStorageKey,
+} from './components/WelcomeRestoreScreen';
 import { databaseService } from './db/DatabaseService';
+import { getBackupList, isLocalDatabaseEmpty } from './lib/googleDriveService';
+import { BackupManifestEntry } from './lib/tauri/bridge';
+import { AppMode, useAuthStore, UserProfile } from './stores/authStore';
 
 const queryClient = new QueryClient();
 
@@ -74,8 +84,44 @@ class AppErrorBoundary extends React.Component<{ children: React.ReactNode }, Er
   }
 }
 
+interface OnboardingWizardProps {
+  onFinished: (configuredPath: string) => void;
+}
+
+function OnboardingWizard({ onFinished }: OnboardingWizardProps) {
+  const existingUser = useAuthStore((s) => s.user);
+  const [selectedMode, setSelectedMode] = useState<AppMode | null>(null);
+  const [cloudUser, setCloudUser] = useState<UserProfile | null>(existingUser);
+
+  if (!selectedMode) {
+    return (
+      <ModeSelector
+        onSelectLocal={() => {
+          setSelectedMode('local');
+        }}
+        onSelectCloud={(profile) => {
+          setCloudUser(profile);
+          setSelectedMode('cloud');
+        }}
+      />
+    );
+  }
+
+  return (
+    <StorageSelector
+      mode={selectedMode}
+      userEmail={cloudUser?.email}
+      onBack={() => setSelectedMode(null)}
+      onComplete={onFinished}
+    />
+  );
+}
+
 function AuthenticatedContent() {
+  const { user } = useAuth();
+  const appMode = useAuthStore((s) => s.appMode);
   const [isDbReady, setIsDbReady] = useState(false);
+  const [welcomeBackups, setWelcomeBackups] = useState<BackupManifestEntry[] | null>(null);
   const { syncNow, isRestoring } = useDriveSync();
   const { isHelpOpen, setIsHelpOpen } = useKeyboardShortcuts(syncNow);
 
@@ -87,6 +133,24 @@ function AuthenticatedContent() {
       try {
         await databaseService.initialize();
         cleanupLateFees = initAutomatedLateFeeSchedule();
+
+        if (
+          appMode === 'cloud' &&
+          user?.sub &&
+          isLocalDatabaseEmpty() &&
+          typeof localStorage !== 'undefined' &&
+          !localStorage.getItem(getCloudOnboardingStorageKey(user.sub)) &&
+          (typeof navigator === 'undefined' || navigator.onLine !== false)
+        ) {
+          try {
+            const backups = await getBackupList();
+            if (active && Array.isArray(backups) && backups.length > 0) {
+              setWelcomeBackups(backups);
+            }
+          } catch (cloudCheckErr) {
+            console.warn('[App] Could not check cloud snapshots on empty DB:', cloudCheckErr);
+          }
+        }
       } catch (err) {
         console.warn('[App] Database initialization notice:', err);
       } finally {
@@ -100,7 +164,7 @@ function AuthenticatedContent() {
       active = false;
       cleanupLateFees?.();
     };
-  }, []);
+  }, [appMode, user?.sub]);
 
   if (!isDbReady) {
     return (
@@ -111,6 +175,17 @@ function AuthenticatedContent() {
           <div className="h-3 w-2/3 rounded bg-[var(--bg-surface-sunken)] animate-pulse" />
         </div>
       </div>
+    );
+  }
+
+  if (appMode === 'cloud' && welcomeBackups && welcomeBackups.length > 0 && user) {
+    return (
+      <WelcomeRestoreScreen
+        userId={user.sub}
+        userEmail={user.email}
+        snapshots={welcomeBackups}
+        onComplete={() => setWelcomeBackups(null)}
+      />
     );
   }
 
@@ -129,10 +204,20 @@ function AuthenticatedContent() {
   );
 }
 
-function AppShell() {
-  const { isAuthenticated, user } = useAuth();
+interface AppShellProps {
+  configuredDataPath: string | null;
+  onOnboardingComplete: (configuredPath: string) => void;
+}
 
-  if (!isAuthenticated || !user) {
+function AppShell({ configuredDataPath, onOnboardingComplete }: AppShellProps) {
+  const { isAuthenticated, user } = useAuth();
+  const appMode = useAuthStore((s) => s.appMode);
+
+  if (configuredDataPath === null || appMode === null) {
+    return <OnboardingWizard onFinished={onOnboardingComplete} />;
+  }
+
+  if (appMode === 'cloud' && (!isAuthenticated || !user)) {
     return <LoginView />;
   }
 
@@ -144,6 +229,11 @@ function AppShell() {
 }
 
 export default function App() {
+  const [configuredDataPath, setConfiguredDataPath] = useState<string | null>(() => {
+    if (typeof localStorage === 'undefined') return 'configured';
+    return localStorage.getItem(DATA_PATH_STORAGE_KEY);
+  });
+
   return (
     <MotionConfig reducedMotion="user">
       <HashRouter>
@@ -153,7 +243,10 @@ export default function App() {
             <ToastProvider>
               <AuthProvider>
                 <PrintProvider>
-                  <AppShell />
+                  <AppShell
+                    configuredDataPath={configuredDataPath}
+                    onOnboardingComplete={(path) => setConfiguredDataPath(path)}
+                  />
                 </PrintProvider>
               </AuthProvider>
             </ToastProvider>

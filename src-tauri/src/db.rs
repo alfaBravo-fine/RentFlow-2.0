@@ -209,9 +209,85 @@ pub fn open_connection(db_path: &Path) -> Result<Connection, String> {
     Ok(conn)
 }
 
+const DATA_PATH_CONFIG_FILENAME: &str = "data_path_config.json";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DataPathConfig {
+    data_path: String,
+}
+
+pub fn validate_data_dir_path(raw_path: &str) -> Result<PathBuf, String> {
+    let trimmed = raw_path.trim();
+    if trimmed.is_empty() {
+        return Err("Data directory path cannot be empty.".to_string());
+    }
+    if trimmed.contains('\0') {
+        return Err("Security Violation: Invalid null character in path.".to_string());
+    }
+    let path = PathBuf::from(trimmed);
+    for component in path.components() {
+        if matches!(component, std::path::Component::ParentDir) {
+            return Err("Security Violation: Path traversal ('..') is not permitted.".to_string());
+        }
+    }
+    if !path.is_absolute() {
+        return Err("Please provide an absolute directory path.".to_string());
+    }
+    Ok(path)
+}
+
+fn data_path_config_file(app: &AppHandle) -> Result<PathBuf, String> {
+    let default_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve default app_data_dir: {}", e))?;
+    fs::create_dir_all(&default_dir)
+        .map_err(|e| format!("Failed to create default app_data_dir: {}", e))?;
+    Ok(default_dir.join(DATA_PATH_CONFIG_FILENAME))
+}
+
+fn read_configured_data_dir(app: &AppHandle) -> Result<Option<PathBuf>, String> {
+    let config_path = data_path_config_file(app)?;
+    if !config_path.exists() {
+        return Ok(None);
+    }
+    let contents = fs::read_to_string(&config_path)
+        .map_err(|e| format!("Failed to read data path config: {}", e))?;
+    let parsed: DataPathConfig = serde_json::from_str(&contents)
+        .map_err(|e| format!("Invalid data path config JSON: {}", e))?;
+    let validated = validate_data_dir_path(&parsed.data_path)?;
+    Ok(Some(validated))
+}
+
+fn write_configured_data_dir(app: &AppHandle, dir_path: &Path) -> Result<String, String> {
+    let config_path = data_path_config_file(app)?;
+    let path_str = dir_path.to_string_lossy().to_string();
+    let payload = serde_json::to_string_pretty(&DataPathConfig {
+        data_path: path_str.clone(),
+    })
+    .map_err(|e| format!("Failed to serialize data path config: {}", e))?;
+
+    fs::write(&config_path, payload)
+        .map_err(|e| format!("Failed to save data path config: {}", e))?;
+    Ok(path_str)
+}
+
+pub fn resolve_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = match read_configured_data_dir(app)? {
+        Some(custom_dir) => custom_dir,
+        None => app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("Failed to resolve app_data_dir: {}", e))?,
+    };
+    fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create data directory {:?}: {}", dir, e))?;
+    Ok(dir)
+}
+
 pub struct DatabaseManager {
     pub conn: Mutex<Connection>,
-    pub db_path: PathBuf,
+    pub db_path: Mutex<PathBuf>,
 }
 
 impl DatabaseManager {
@@ -219,7 +295,7 @@ impl DatabaseManager {
         let conn = open_connection(&db_path)?;
         let mgr = Self {
             conn: Mutex::new(conn),
-            db_path,
+            db_path: Mutex::new(db_path),
         };
 
         mgr.run_migrations()?;
@@ -228,6 +304,29 @@ impl DatabaseManager {
 
     pub fn new_with_key(db_path: PathBuf, _key: &str) -> Result<Self, String> {
         Self::new(db_path)
+    }
+
+    pub fn current_db_path(&self) -> Result<PathBuf, String> {
+        self.db_path
+            .lock()
+            .map(|p| p.clone())
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn switch_database(&self, new_db_path: PathBuf) -> Result<(), String> {
+        {
+            let mut conn_guard = self.conn.lock().map_err(|e| e.to_string())?;
+            let mut path_guard = self.db_path.lock().map_err(|e| e.to_string())?;
+            if *path_guard == new_db_path {
+                return Ok(());
+            }
+            let _ = conn_guard.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+            let new_conn = open_connection(&new_db_path)?;
+            *conn_guard = new_conn;
+            *path_guard = new_db_path;
+        }
+        self.run_migrations()?;
+        Ok(())
     }
 
     pub fn run_migrations(&self) -> Result<(), String> {
@@ -673,18 +772,14 @@ pub fn validate_safe_path(path_str: &str) -> Result<(), String> {
 // --- Core Tauri Database Commands ---
 
 #[tauri::command]
-pub async fn db_init(app: AppHandle) -> Result<String, String> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to resolve app data dir: {}", e))?;
-    let db_path = app_data_dir.join("rentflow.db");
-
-    if let Some(parent) = db_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("Dir create error: {}", e))?;
-    }
-
-    let _mgr = DatabaseManager::new(db_path)?;
+pub async fn db_init(
+    app: AppHandle,
+    state: tauri::State<'_, DatabaseManager>,
+) -> Result<String, String> {
+    let data_dir = resolve_data_dir(&app)?;
+    let db_path = data_dir.join("rentflow.db");
+    state.switch_database(db_path)?;
+    state.run_migrations()?;
     Ok("SQLite database initialized successfully".to_string())
 }
 
@@ -1278,8 +1373,9 @@ pub async fn db_backup_file(
 
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     let _ = conn.execute("PRAGMA wal_checkpoint(FULL);", []);
+    let current_db_path = state.current_db_path()?;
 
-    fs::copy(&state.db_path, &dest)
+    fs::copy(&current_db_path, &dest)
         .map_err(|e| format!("Failed to copy database file: {}", e))?;
 
     Ok(format!(
@@ -1629,9 +1725,98 @@ pub async fn save_settings(
 
 #[tauri::command]
 pub async fn get_app_data_path(
+    app: AppHandle,
     state: tauri::State<'_, DatabaseManager>,
 ) -> Result<String, String> {
-    Ok(state.db_path.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default())
+    if let Ok(db_path) = state.current_db_path() {
+        if let Some(parent) = db_path.parent() {
+            return Ok(parent.to_string_lossy().to_string());
+        }
+    }
+    let dir = resolve_data_dir(&app)?;
+    Ok(dir.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn get_data_path(app: AppHandle) -> Result<String, String> {
+    let dir = resolve_data_dir(&app)?;
+    Ok(dir.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn set_data_path(
+    app: AppHandle,
+    path: String,
+    state: tauri::State<'_, DatabaseManager>,
+) -> Result<String, String> {
+    let target_dir = validate_data_dir_path(&path)?;
+    fs::create_dir_all(&target_dir)
+        .map_err(|e| format!("Failed to create target data directory {:?}: {}", target_dir, e))?;
+
+    let saved = write_configured_data_dir(&app, &target_dir)?;
+    let new_db_path = target_dir.join("rentflow.db");
+    state.switch_database(new_db_path)?;
+
+    eprintln!("[RentFlow DB] Custom data path configured: {}", saved);
+    Ok(saved)
+}
+
+#[tauri::command]
+pub async fn migrate_database(
+    app: AppHandle,
+    new_path: String,
+    state: tauri::State<'_, DatabaseManager>,
+) -> Result<String, String> {
+    let new_dir = validate_data_dir_path(&new_path)?;
+    fs::create_dir_all(&new_dir)
+        .map_err(|e| format!("Failed to create destination directory {:?}: {}", new_dir, e))?;
+
+    let new_db_path = new_dir.join("rentflow.db");
+
+    {
+        let conn = state.conn.lock().map_err(|e| e.to_string())?;
+        let old_db_path = state.current_db_path()?;
+
+        if old_db_path == new_db_path {
+            let saved = write_configured_data_dir(&app, &new_dir)?;
+            return Ok(saved);
+        }
+
+        // Flush all WAL pages into the primary rentflow.db file before copying
+        let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+
+        if old_db_path.exists() {
+            let staging_path = new_dir.join("rentflow.db.migrating");
+            fs::copy(&old_db_path, &staging_path)
+                .map_err(|e| format!("Failed to copy rentflow.db to {:?}: {}", staging_path, e))?;
+
+            // Remove stale WAL/SHM sidecars in destination if an older DB lived there
+            let dest_wal = new_dir.join("rentflow.db-wal");
+            let dest_shm = new_dir.join("rentflow.db-shm");
+            if dest_wal.exists() {
+                let _ = fs::remove_file(&dest_wal);
+            }
+            if dest_shm.exists() {
+                let _ = fs::remove_file(&dest_shm);
+            }
+
+            if new_db_path.exists() {
+                fs::remove_file(&new_db_path).map_err(|e| {
+                    let _ = fs::remove_file(&staging_path);
+                    format!("Failed to replace existing database at {:?}: {}", new_db_path, e)
+                })?;
+            }
+
+            fs::rename(&staging_path, &new_db_path).map_err(|e| {
+                let _ = fs::remove_file(&staging_path);
+                format!("Failed to finalize migrated database at {:?}: {}", new_db_path, e)
+            })?;
+        }
+    }
+
+    let saved = write_configured_data_dir(&app, &new_dir)?;
+    eprintln!("[RentFlow DB] Database migrated cleanly to {}", saved);
+    Ok(saved)
 }
 
 #[derive(serde::Deserialize)]

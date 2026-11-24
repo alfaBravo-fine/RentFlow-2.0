@@ -1,39 +1,95 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { useDriveSync } from '../../hooks/useDriveSync';
 import { syncEngine } from '../../lib/sync';
 import { db } from '../../db/client';
+import { BackupManifestEntry } from '../../lib/tauri/bridge';
 import { Card, CardHeader, CardTitle } from '../../components/ui/Card';
-import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
+import { Modal } from '../../components/ui/Modal';
+import { formatSnapshotSummary, RestoreModal } from '../../components/RestoreModal';
+import { useToast } from '../../components/toast/ToastContext';
 import {
   RefreshCw,
   Download,
-  Upload,
   ShieldCheck,
   CheckCircle,
   FileSpreadsheet,
-  Database,
-  Lock,
   Folder,
   AlertCircle,
+  Calendar,
+  Database,
+  Cloud,
+  History,
 } from '../../components/icons';
 
 export const SyncView: React.FC = () => {
+  const navigate = useNavigate();
+  const { showToast } = useToast();
+  const appMode = useAuthStore((s) => s.appMode);
   const user = useAuthStore((s) => s.user);
-  const { syncState, lastSyncedAt, syncError, syncNow, restoreFromDrive, isRestoring } = useDriveSync();
+  const {
+    syncState,
+    lastSyncedAt,
+    syncError,
+    syncNow,
+    getBackupList,
+    restoreFromSnapshot,
+    isRestoring,
+  } = useDriveSync();
+
   const [isManualSyncing, setIsManualSyncing] = useState(false);
-  const [isManualRestoring, setIsManualRestoring] = useState(false);
+  const [isRestoreModalOpen, setIsRestoreModalOpen] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
+
+  // Embedded Versioned Snapshot List state
+  const [snapshots, setSnapshots] = useState<BackupManifestEntry[]>([]);
+  const [isLoadingSnapshots, setIsLoadingSnapshots] = useState(false);
+  const [snapshotsError, setSnapshotsError] = useState<string | null>(null);
+  const [confirmEntry, setConfirmEntry] = useState<BackupManifestEntry | null>(null);
+  const [restoringFilename, setRestoringFilename] = useState<string | null>(null);
 
   const pendingCount = syncEngine.getPendingCount();
 
+  const loadSnapshots = useCallback(async () => {
+    if (appMode !== 'cloud' || !user) return;
+    setIsLoadingSnapshots(true);
+    setSnapshotsError(null);
+    try {
+      const list = await getBackupList();
+      setSnapshots(Array.isArray(list) ? list : []);
+    } catch (err: unknown) {
+      const msg =
+        typeof err === 'string'
+          ? err
+          : (err as { message?: string })?.message ||
+            'Could not load backup snapshots from Google Drive.';
+      setSnapshotsError(msg);
+    } finally {
+      setIsLoadingSnapshots(false);
+    }
+  }, [appMode, user, getBackupList]);
+
+  useEffect(() => {
+    if (appMode === 'cloud' && user) {
+      void loadSnapshots();
+    }
+  }, [appMode, user, loadSnapshots]);
+
   const handleManualSync = async () => {
     setIsManualSyncing(true);
-    setStatusMsg('Encrypting full database snapshot + settings + themes with AES-256-GCM and uploading RentFlow_FullBackup.enc to drive.appdata...');
+    setStatusMsg(
+      "Encrypting SQLite snapshot with AES-256-GCM and uploading to 'RentFlow Backups' in Google Drive..."
+    );
     try {
-      await syncNow();
-      setStatusMsg('Successfully synchronized RentFlow_FullBackup.enc to Google Drive (drive.appdata)');
+      const res = await syncNow();
+      setStatusMsg(
+        res?.filename
+          ? `Saved versioned snapshot ${res.filename} to 'RentFlow Backups' (${res.snapshotCount} of 15 snapshots in manifest.json).`
+          : "Successfully synchronized versioned snapshot to 'RentFlow Backups'."
+      );
+      await loadSnapshots();
     } catch (err: any) {
       setStatusMsg(err.message || 'Sync failed');
     } finally {
@@ -41,25 +97,29 @@ export const SyncView: React.FC = () => {
     }
   };
 
-  const handleRestoreFromDrive = async () => {
-    const confirmed = window.confirm(
-      'Are you sure you want to restore from Google Drive? This will pull RentFlow_FullBackup.enc, decrypt all records, wipe current local data, and restore all properties, units, tenants, leases, invoices, payments, expenses, settings, and themes.'
-    );
-    if (!confirmed) return;
-
-    setIsManualRestoring(true);
-    setStatusMsg('Downloading RentFlow_FullBackup.enc from Google Drive, decrypting AES-256-GCM, and restoring all database tables, themes, and settings...');
+  const handleInlineRestore = async (entry: BackupManifestEntry) => {
+    setRestoringFilename(entry.filename);
     try {
-      const res = await restoreFromDrive();
-      if (res && res.restored) {
-        setStatusMsg(`Successfully restored full portfolio (${res.totalRecords || 0} records across tables), custom themes, and settings from Google Drive!`);
+      const res = await restoreFromSnapshot(entry.filename);
+      if (res.restored) {
+        setConfirmEntry(null);
+        showToast({
+          type: 'success',
+          message: `Restored ${res.totalRecords} records from ${entry.filename}. Reloading RentFlow...`,
+        });
+        window.location.reload();
       } else {
-        setStatusMsg(res?.message || 'Restore completed (no backup found or already up to date).');
+        setSnapshotsError(res.message || 'Selected snapshot did not contain restorable records.');
       }
-    } catch (err: any) {
-      setStatusMsg(`Restore error: ${err.message || 'Failed to restore from Google Drive'}`);
+    } catch (err: unknown) {
+      const msg =
+        typeof err === 'string'
+          ? err
+          : (err as { message?: string })?.message || 'Failed to restore selected snapshot.';
+      setSnapshotsError(msg);
+      showToast({ type: 'error', message: msg });
     } finally {
-      setIsManualRestoring(false);
+      setRestoringFilename(null);
     }
   };
 
@@ -71,13 +131,13 @@ export const SyncView: React.FC = () => {
     a.href = url;
     a.download = `rentflow_backup_${new Date().toISOString().slice(0, 10)}.enc.json`;
     a.click();
+    URL.revokeObjectURL(url);
   };
 
   const handleExportAllDataCSV = () => {
     const tenants = db.getTable('tenants');
     const leases = db.getTable('leases');
     const invoices = db.getTable('invoices');
-    const maintenance = db.getTable('maintenance_requests');
 
     let csv = `EXPORT DATE,${new Date().toISOString()}\n\n`;
 
@@ -102,17 +162,52 @@ export const SyncView: React.FC = () => {
     a.href = url;
     a.download = `rentflow_all_records_export_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
+    URL.revokeObjectURL(url);
   };
+
+  if (appMode !== 'cloud') {
+    return (
+      <div className="max-w-2xl mx-auto py-12">
+        <Card className="p-8 text-center space-y-4 rounded-2xl">
+          <div className="w-12 h-12 rounded-2xl bg-[var(--bg-surface-sunken)] border border-[var(--border-subtle)] text-[var(--text-primary)] flex items-center justify-center mx-auto">
+            <Cloud className="w-6 h-6" />
+          </div>
+          <div className="space-y-1.5">
+            <h2 className="text-lg font-bold text-[var(--text-primary)]">
+              Cloud Backup Not Linked
+            </h2>
+            <p className="text-xs text-[var(--text-secondary)] max-w-md mx-auto leading-relaxed">
+              RentFlow is currently running in Offline &amp; Private mode. Link your Google Drive in General Settings to enable encrypted versioned snapshots.
+            </p>
+          </div>
+          <div className="pt-2">
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              onClick={() => navigate('/settings/general')}
+            >
+              Open General Settings
+            </Button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">
-            Google Drive Encrypted Sync Hub
+            Drive Sync &amp; Backup
           </h1>
           <p className="text-xs text-[var(--text-secondary)] mt-1">
-            Zero-Knowledge AES-256-GCM Cloud Redundancy &bull; Hidden <code className="font-mono bg-[var(--bg-surface)] px-1.5 py-0.5 rounded border border-[var(--border-subtle)]">drive.appdata</code> Storage
+            Zero-Knowledge AES-256-GCM Snapshots &bull; Visible{' '}
+            <code className="font-mono bg-[var(--bg-surface)] px-1.5 py-0.5 rounded border border-[var(--border-subtle)]">
+              RentFlow Backups
+            </code>{' '}
+            Folder
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -123,22 +218,30 @@ export const SyncView: React.FC = () => {
           <Button
             variant="outline"
             size="sm"
-            onClick={handleRestoreFromDrive}
-            disabled={isManualSyncing || isManualRestoring || isRestoring || syncState === 'syncing'}
+            onClick={() => setIsRestoreModalOpen(true)}
+            disabled={isManualSyncing || isRestoring || syncState === 'syncing'}
             className="gap-2 border-[var(--accent)]/40 text-[var(--accent)] hover:bg-[var(--accent-subtle)]/30"
           >
-            <Download className={`w-3.5 h-3.5 ${isManualRestoring || isRestoring ? 'animate-bounce' : ''}`} />
-            <span>{isManualRestoring || isRestoring ? 'Restoring from Drive...' : 'Restore from Drive'}</span>
+            <Download className={`w-3.5 h-3.5 ${isRestoring ? 'animate-bounce' : ''}`} />
+            <span>{isRestoring ? 'Restoring...' : 'Restore from Drive'}</span>
           </Button>
           <Button
             variant="primary"
             size="sm"
             onClick={handleManualSync}
-            disabled={isManualSyncing || isManualRestoring || isRestoring || syncState === 'syncing'}
+            disabled={isManualSyncing || isRestoring || syncState === 'syncing'}
             className="gap-2"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${isManualSyncing || syncState === 'syncing' ? 'animate-spin' : ''}`} />
-            <span>{isManualSyncing || syncState === 'syncing' ? 'Syncing...' : 'Sync Now to Google Drive'}</span>
+            <RefreshCw
+              className={`w-3.5 h-3.5 ${
+                isManualSyncing || syncState === 'syncing' ? 'animate-spin' : ''
+              }`}
+            />
+            <span>
+              {isManualSyncing || syncState === 'syncing'
+                ? 'Syncing...'
+                : 'Sync Now to Google Drive'}
+            </span>
           </Button>
         </div>
       </div>
@@ -164,81 +267,187 @@ export const SyncView: React.FC = () => {
             <Folder className="w-6 h-6" />
           </div>
           <div>
-            <div className="flex items-center gap-2">
-              <h3 className="text-sm font-bold text-[var(--text-primary)]">Google Drive Sync Engine</h3>
-              <Badge
-                variant={
-                  syncState === 'synced'
-                    ? 'success'
-                    : syncState === 'syncing' || syncState === 'pending'
-                    ? 'info'
-                    : syncState === 'error'
-                    ? 'danger'
-                    : 'neutral'
-                }
-              >
+            <div className="flex items-center gap-2.5">
+              <h3 className="text-sm font-bold text-[var(--text-primary)]">
+                Google Drive Sync Engine
+              </h3>
+              <span className="text-xs font-medium text-[var(--text-secondary)]">
                 {syncState === 'synced'
-                  ? 'All Changes Synced'
+                  ? '· Synced to Drive'
                   : syncState === 'syncing'
-                  ? 'Syncing to Drive...'
+                  ? '· Syncing to Drive...'
                   : syncState === 'pending'
-                  ? 'Write Detected (Sync in 5s)'
-                  : 'Idle'}
-              </Badge>
+                  ? '· Write Detected (Syncing in 500ms)'
+                  : '· Ready'}
+              </span>
             </div>
-            <p className="text-xs text-[var(--text-secondary)] mt-0.5">
-              Connected Account: <strong className="text-[var(--text-primary)]">{user?.email || 'Authenticated'}</strong> &bull;
-              Last Synced: <span className="font-mono">{lastSyncedAt ? new Date(lastSyncedAt).toLocaleString() : 'Just now'}</span>
+            <p className="text-xs text-[var(--text-secondary)] mt-0.5 tabular-nums">
+              Connected Account:{' '}
+              <strong className="text-[var(--text-primary)]">
+                {user?.email || 'Authenticated'}
+              </strong>{' '}
+              &bull; Last Synced:{' '}
+              <span className="font-mono">
+                {lastSyncedAt ? new Date(lastSyncedAt).toLocaleString() : 'Ready'}
+              </span>
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
           <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-          <span>Key derived from Google ID: <code className="font-mono text-[11px]">{user?.sub?.slice(0, 8)}...</code></span>
+          <span>
+            Encryption key bound to Google ID:{' '}
+            <code className="font-mono text-[11px]">{user?.sub?.slice(0, 8)}...</code>
+          </span>
         </div>
+      </Card>
+
+      {/* Versioned Snapshot History Directly Inside Sync Tab */}
+      <Card className="space-y-4 rounded-2xl">
+        <CardHeader className="mb-1">
+          <div className="flex items-center gap-2.5">
+            <History className="w-4 h-4 text-[var(--accent)]" />
+            <div>
+              <CardTitle>Versioned Backup Snapshots</CardTitle>
+              <p className="text-xs text-[var(--text-secondary)] mt-0.5">
+                Pick any date from your visible <code className="font-mono">RentFlow Backups</code> Google Drive folder to restore.
+              </p>
+            </div>
+          </div>
+
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => void loadSnapshots()}
+            disabled={isLoadingSnapshots || Boolean(restoringFilename)}
+            className="gap-1.5 shrink-0"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoadingSnapshots ? 'animate-spin' : ''}`} />
+            <span>Refresh</span>
+          </Button>
+        </CardHeader>
+
+        {snapshotsError && (
+          <div
+            role="alert"
+            className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/25 text-xs text-rose-700 dark:text-rose-300 flex items-start gap-2.5"
+          >
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>{snapshotsError}</span>
+          </div>
+        )}
+
+        {isLoadingSnapshots ? (
+          <div className="py-10 flex flex-col items-center justify-center text-center space-y-2.5">
+            <RefreshCw className="w-5 h-5 animate-spin text-[var(--accent)]" />
+            <p className="text-xs text-[var(--text-secondary)]">
+              Loading snapshot history from Google Drive...
+            </p>
+          </div>
+        ) : snapshots.length === 0 ? (
+          <div className="py-8 px-4 text-center rounded-xl border border-dashed border-[var(--border-strong)] bg-[var(--bg-surface-sunken)] space-y-2">
+            <Cloud className="w-6 h-6 mx-auto text-[var(--text-subtle)]" />
+            <p className="text-sm font-semibold text-[var(--text-primary)]">
+              No backup snapshots uploaded yet
+            </p>
+            <p className="text-xs text-[var(--text-secondary)] max-w-md mx-auto leading-relaxed">
+              Click &ldquo;Sync Now to Google Drive&rdquo; above or modify any record to save your first encrypted snapshot.
+            </p>
+          </div>
+        ) : (
+          <div className="divide-y divide-[var(--border-subtle)] border border-[var(--border-subtle)] rounded-xl overflow-hidden bg-[var(--bg-surface-sunken)]/40">
+            {snapshots.map((entry, idx) => {
+              const summaryLabel = formatSnapshotSummary(entry);
+              const isThisRestoring = restoringFilename === entry.filename;
+
+              return (
+                <div
+                  key={`${entry.filename}-${idx}`}
+                  className="p-3.5 sm:px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-[var(--bg-surface)] hover:bg-[var(--bg-base)] transition-colors"
+                >
+                  <div className="min-w-0 space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Calendar className="w-3.5 h-3.5 text-[var(--accent)] shrink-0" />
+                      <span className="text-xs font-semibold text-[var(--text-primary)] tabular-nums">
+                        {summaryLabel}
+                      </span>
+                      {idx === 0 && (
+                        <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                          · Latest
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--text-secondary)] tabular-nums">
+                      <span className="font-mono truncate">{entry.filename}</span>
+                      {typeof entry.record_count === 'number' && (
+                        <span className="inline-flex items-center gap-1">
+                          <Database className="w-3 h-3" />
+                          <span>{entry.record_count} records</span>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setConfirmEntry(entry)}
+                    disabled={Boolean(restoringFilename) || isManualSyncing || isRestoring}
+                    className="gap-1.5 shrink-0 cursor-pointer whitespace-nowrap"
+                  >
+                    <Download className={`w-3.5 h-3.5 ${isThisRestoring ? 'animate-bounce' : ''}`} />
+                    <span>{isThisRestoring ? 'Restoring...' : 'Restore'}</span>
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </Card>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <Card className="space-y-4 rounded-2xl">
           <CardHeader>
             <CardTitle>Cloud Drive Redundancy</CardTitle>
-            <Badge variant="success">drive.appdata Scope</Badge>
+            <span className="text-xs font-medium text-emerald-600">drive.file</span>
           </CardHeader>
-          <div className="space-y-2 text-xs text-[var(--text-secondary)]">
-            <p><strong>Storage Space:</strong> Hidden <code className="bg-[var(--bg-base)] px-1 rounded">appDataFolder</code></p>
-            <p><strong>Cipher:</strong> AES-256-GCM Authenticated</p>
-            <p><strong>Auto-Trigger:</strong> 5s Debounce after DB writes</p>
-            <p><strong>Local Queue:</strong> {pendingCount} recorded mutations</p>
+          <div className="space-y-2 text-xs text-[var(--text-secondary)] tabular-nums">
+            <p>
+              <strong>Drive Folder:</strong> Visible{' '}
+              <code className="bg-[var(--bg-base)] px-1 rounded">RentFlow Backups</code>
+            </p>
+            <p>
+              <strong>Versioning:</strong> Rolling 15 snapshots via{' '}
+              <code className="bg-[var(--bg-base)] px-1 rounded">manifest.json</code>
+            </p>
+            <p>
+              <strong>Auto-Trigger:</strong> Instant 500ms debounce after writes
+            </p>
+            <p>
+              <strong>Local Queue:</strong> {pendingCount} recorded mutations
+            </p>
           </div>
-          <div className="flex flex-col gap-2 pt-1">
-            <Button
-              variant="outline"
-              className="w-full justify-center text-xs"
-              onClick={handleManualSync}
-              disabled={isManualSyncing || isManualRestoring || isRestoring || syncState === 'syncing'}
-            >
-              Force Immediate Cloud Push
-            </Button>
-            <Button
-              variant="outline"
-              className="w-full justify-center text-xs border-[var(--accent)]/40 text-[var(--accent)] hover:bg-[var(--accent-subtle)]/30 gap-1.5"
-              onClick={handleRestoreFromDrive}
-              disabled={isManualSyncing || isManualRestoring || isRestoring || syncState === 'syncing'}
-            >
-              <Download className={`w-3.5 h-3.5 ${isManualRestoring || isRestoring ? 'animate-bounce' : ''}`} />
-              <span>Restore Portfolio from Drive</span>
-            </Button>
-          </div>
+          <Button
+            variant="outline"
+            className="w-full justify-center text-xs"
+            onClick={handleManualSync}
+            disabled={isManualSyncing || isRestoring || syncState === 'syncing'}
+          >
+            Create Snapshot Now
+          </Button>
         </Card>
 
         <Card className="space-y-4 rounded-2xl">
           <CardHeader>
             <CardTitle>Offline Encrypted Backup</CardTitle>
-            <Badge variant="neutral">Zero-Knowledge</Badge>
+            <span className="text-xs font-medium text-[var(--text-secondary)]">AES-256-GCM</span>
           </CardHeader>
           <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
-            Export a standalone encrypted <code className="bg-[var(--bg-base)] px-1 rounded">.enc.json</code> payload to your local drive or offline flash drive.
+            Export a standalone encrypted{' '}
+            <code className="bg-[var(--bg-base)] px-1 rounded">.enc.json</code> payload to your local drive or external storage.
           </p>
           <Button variant="outline" className="w-full gap-2" onClick={handleExportLocalBackup}>
             <Download className="w-4 h-4 text-[var(--accent)]" />
@@ -249,7 +458,7 @@ export const SyncView: React.FC = () => {
         <Card className="space-y-4 rounded-2xl">
           <CardHeader>
             <CardTitle>Portfolio Data Export</CardTitle>
-            <Badge variant="info">Full Relational Export</Badge>
+            <span className="text-xs font-medium text-[var(--accent)]">CSV Archive</span>
           </CardHeader>
           <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
             Export all tenants, leases, deposits, maintenance records, and rent invoices into a unified CSV archive.
@@ -260,6 +469,70 @@ export const SyncView: React.FC = () => {
           </Button>
         </Card>
       </div>
+
+      {/* Inline Snapshot Restore Confirmation Modal */}
+      <Modal
+        isOpen={Boolean(confirmEntry)}
+        onClose={() => !restoringFilename && setConfirmEntry(null)}
+        title="Restore Snapshot?"
+        description="Replaces your current local SQLite database with the selected backup snapshot."
+        maxWidth="md"
+      >
+        {confirmEntry && (
+          <div className="space-y-4">
+            <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/25 text-xs text-amber-800 dark:text-amber-200 space-y-1.5">
+              <p className="font-semibold">{formatSnapshotSummary(confirmEntry)}</p>
+              <p className="font-mono text-[11px] opacity-90">{confirmEntry.filename}</p>
+              <p className="text-[11px] opacity-90 leading-relaxed pt-1">
+                RentFlow will download and decrypt this snapshot, replace all local tables, and reload the application.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-[var(--border-subtle)]">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setConfirmEntry(null)}
+                disabled={Boolean(restoringFilename)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                onClick={() => void handleInlineRestore(confirmEntry)}
+                disabled={Boolean(restoringFilename)}
+                className="gap-1.5"
+              >
+                {restoringFilename ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Restoring...</span>
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Confirm Restore</span>
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <RestoreModal
+        isOpen={isRestoreModalOpen}
+        onClose={() => setIsRestoreModalOpen(false)}
+        onRestored={(res) => {
+          setStatusMsg(
+            `Successfully restored ${res.totalRecords || 0} records from snapshot ${res.filename || ''} into local SQLite database.`
+          );
+          void loadSnapshots();
+        }}
+      />
     </div>
   );
 };

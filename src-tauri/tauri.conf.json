@@ -11,7 +11,7 @@
   },
   "app": {
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.tile.openstreetmap.org https://server.arcgisonline.com https://*.tile.opentopomap.org https://*.googleusercontent.com https:; connect-src 'self' https://www.googleapis.com https://accounts.google.com https://oauth2.googleapis.com https://*.tile.openstreetmap.org https://server.arcgisonline.com https://*.tile.opentopomap.org"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; child-src 'self' blob:; img-src 'self' data: blob: https://api.maptiler.com https://*.maptiler.com https://*.tile.openstreetmap.org https://*.googleusercontent.com https:; connect-src 'self' https://api.maptiler.com https://*.maptiler.com https://nominatim.openstreetmap.org https://*.tile.openstreetmap.org https://www.googleapis.com https://accounts.google.com https://oauth2.googleapis.com"
     },
     "windows": [
       {

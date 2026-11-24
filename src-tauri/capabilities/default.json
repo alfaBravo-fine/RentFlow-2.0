@@ -10,6 +10,8 @@
     "oauth:default",
     "store:default",
     "updater:default",
-    "autostart:default"
+    "autostart:default",
+    "dialog:default",
+    "fs:default"
   ]
 }

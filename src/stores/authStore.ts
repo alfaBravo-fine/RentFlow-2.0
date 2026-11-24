@@ -1,5 +1,10 @@
 import { create } from 'zustand';
-import { isTauri, tauriGoogleGetCurrentUser, tauriGoogleLogout } from '../lib/tauri/bridge';
+import { invoke } from '@tauri-apps/api/core';
+import { AuthResponse } from '../lib/tauri/bridge';
+
+export type AppMode = 'local' | 'cloud';
+
+export const APP_MODE_STORAGE_KEY = 'rentflow_app_mode';
 
 export interface UserProfile {
   sub: string;
@@ -9,12 +14,14 @@ export interface UserProfile {
 }
 
 export interface AuthState {
+  appMode: AppMode | null;
   user: UserProfile | null;
   accessToken: string | null;
   driveFileId: string | null;
   isAuthenticated: boolean;
   isAuthenticating: boolean;
   authError: string | null;
+  setAppMode: (mode: AppMode | null) => void;
   setAuthenticating: (isAuthenticating: boolean, error?: string | null) => void;
   setGoogleSession: (user: UserProfile, _unusedToken?: string, driveFileId?: string) => void;
   setAccessToken: (accessToken: string | null) => void;
@@ -37,7 +44,26 @@ function getStoredProfile(): UserProfile | null {
   }
 }
 
+function getStoredAppMode(): AppMode | null {
+  if (typeof localStorage === 'undefined') return 'local';
+  try {
+    const raw = localStorage.getItem(APP_MODE_STORAGE_KEY);
+    if (raw === 'local' || raw === 'cloud') {
+      return raw;
+    }
+    // Preserve legacy configured cloud sessions seamlessly
+    const hasDataPath = Boolean(localStorage.getItem('rentflow_data_path'));
+    if (hasDataPath && getStoredProfile()) {
+      return 'cloud';
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export const useAuthStore = create<AuthState>((set, get) => ({
+  appMode: getStoredAppMode(),
   user: getStoredProfile(),
   accessToken: null,
   driveFileId:
@@ -45,6 +71,17 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   isAuthenticated: !!getStoredProfile(),
   isAuthenticating: false,
   authError: null,
+
+  setAppMode: (mode: AppMode | null) => {
+    if (typeof localStorage !== 'undefined') {
+      if (mode === null) {
+        localStorage.removeItem(APP_MODE_STORAGE_KEY);
+      } else {
+        localStorage.setItem(APP_MODE_STORAGE_KEY, mode);
+      }
+    }
+    set({ appMode: mode });
+  },
 
   setAuthenticating: (isAuthenticating: boolean, error: string | null = null) => {
     set({ isAuthenticating, authError: error });
@@ -71,14 +108,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   setAccessToken: () => {
-    // Raw OAuth tokens are strictly confined to the Rust backend & Store persistence
+    // Raw OAuth tokens remain strictly in the Rust backend & Store persistence
     set({ accessToken: null });
   },
 
   hydrateDesktopSession: async () => {
-    if (!isTauri()) return;
+    if (get().appMode === 'local') {
+      return;
+    }
     try {
-      const profile = await tauriGoogleGetCurrentUser();
+      const profile = await invoke<AuthResponse | null>('google_get_current_user');
       if (profile && profile.email) {
         const mapped: UserProfile = {
           sub: profile.id,
@@ -106,12 +145,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   signOut: async () => {
-    if (isTauri()) {
-      try {
-        await tauriGoogleLogout();
-      } catch (e) {
-        console.warn('Error logging out from Tauri backend:', e);
-      }
+    try {
+      await invoke<void>('google_oauth_logout');
+    } catch (e) {
+      console.warn('Error logging out from Tauri backend:', e);
     }
 
     if (typeof localStorage !== 'undefined') {

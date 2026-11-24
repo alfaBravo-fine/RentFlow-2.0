@@ -38,6 +38,7 @@ export const TopNavTabs: React.FC = () => {
   const navigate = useNavigate();
   const { isDarkMode, toggleTheme } = useTheme();
   const { setUILayout } = useUIStore();
+  const appMode = useAuthStore((s) => s.appMode);
   const user = useAuthStore((s) => s.user);
   const signOut = useAuthStore((s) => s.signOut);
 
@@ -62,7 +63,9 @@ export const TopNavTabs: React.FC = () => {
     { to: '/documents', label: 'Documents', icon: Folder },
     { to: '/owners', label: 'Owner Statements', icon: UserCheck },
     { to: '/reports', label: 'Reports', icon: BarChart3 },
-    { to: '/sync', label: 'Drive Sync', icon: RefreshCw },
+    ...(appMode === 'cloud'
+      ? [{ to: '/sync', label: 'Drive Sync & Backup', icon: RefreshCw }]
+      : []),
     { to: '/settings', label: 'Settings', icon: Settings, tourId: 'settings-tab' },
   ];
 
@@ -181,8 +184,18 @@ export const TopNavTabs: React.FC = () => {
             {isDarkMode ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4" />}
           </button>
 
-          {/* User Profile Avatar / Sign Out */}
-          {user && (
+          {/* User Profile Avatar / Local Mode */}
+          {appMode === 'local' ? (
+            <div
+              className="flex items-center gap-2 px-2.5 h-9 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface-sunken)] text-xs"
+              title="Local Admin · Offline Mode"
+            >
+              <UserCheck className="w-3.5 h-3.5 text-[var(--text-primary)]" />
+              <span className="hidden sm:inline font-medium text-[var(--text-primary)] whitespace-nowrap">
+                Local Admin
+              </span>
+            </div>
+          ) : user ? (
             <button
               onClick={signOut}
               className="w-9 h-9 rounded-xl bg-[var(--accent-subtle)] text-[var(--accent)] font-bold text-xs flex items-center justify-center hover:opacity-80 transition-opacity cursor-pointer shadow-2xs"
@@ -190,7 +203,7 @@ export const TopNavTabs: React.FC = () => {
             >
               {user.email[0].toUpperCase()}
             </button>
-          )}
+          ) : null}
         </div>
       </div>
 

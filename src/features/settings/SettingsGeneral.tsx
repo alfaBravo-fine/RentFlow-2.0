@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { usePack, usePackStore } from '../../countries/usePack';
 import { AVAILABLE_PACKS } from '../../countries/resolver';
 import { Card, CardHeader, CardTitle, CardDescription } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
+import { Modal } from '../../components/ui/Modal';
 import {
   Globe,
   AlertCircle,
@@ -12,71 +14,108 @@ import {
   Check,
   CheckCircle2,
   Play,
+  Cloud,
+  RefreshCw,
+  Upload,
+  ShieldCheck,
 } from '../../components/icons';
 import { useToast } from '../../components/toast/ToastContext';
 import { databaseService } from '../../db/DatabaseService';
 import { useAppSettingsStore } from '../../stores/appSettingsStore';
+import { useAuthStore } from '../../stores/authStore';
+import { useAuth } from '../auth/AuthProvider';
+import { pushToGoogleDrive } from '../../lib/googleDriveService';
 import { parseMajorToMinor, minorToMajorNumber } from '../../lib/money';
 import {
-  isTauri,
   tauriGetAutostartEnabled,
   tauriSetAutostartEnabled,
 } from '../../lib/tauri/bridge';
 import { START_TOUR_EVENT } from '../../hooks/useAppTour';
 
 export const SettingsGeneral: React.FC = () => {
+  const navigate = useNavigate();
   const pack = usePack();
   const setCountryCode = usePackStore((s) => s.setCountryCode);
   const { showToast } = useToast();
+
+  // Mode & Cloud Linking State
+  const appMode = useAuthStore((s) => s.appMode);
+  const setAppMode = useAuthStore((s) => s.setAppMode);
+  const user = useAuthStore((s) => s.user);
+  const { loginWithGoogle, isAuthenticating } = useAuth();
+  const [isUploadPromptOpen, setIsUploadPromptOpen] = useState(false);
+  const [isUploadingFirstSnapshot, setIsUploadingFirstSnapshot] = useState(false);
 
   // Launch at Windows Startup state
   const launchAtStartup = useAppSettingsStore((s) => s.launchAtStartup);
   const setLaunchAtStartup = useAppSettingsStore((s) => s.setLaunchAtStartup);
   const [isUpdatingStartup, setIsUpdatingStartup] = useState(false);
 
-  // Sync actual OS autostart status when running in Tauri desktop
+  // Sync actual OS autostart status from Tauri desktop backend
   useEffect(() => {
     let active = true;
-    if (isTauri()) {
-      tauriGetAutostartEnabled()
-        .then((enabled) => {
-          if (active) {
-            setLaunchAtStartup(enabled);
-          }
-        })
-        .catch((err) => {
-          console.warn('[SettingsGeneral] Could not query autostart status:', err);
-        });
-    }
+    tauriGetAutostartEnabled()
+      .then((enabled) => {
+        if (active) {
+          setLaunchAtStartup(enabled);
+        }
+      })
+      .catch((err) => {
+        console.warn('[SettingsGeneral] Could not query autostart status:', err);
+      });
     return () => {
       active = false;
     };
   }, [setLaunchAtStartup]);
 
+  const handleLinkGoogleDrive = async () => {
+    await loginWithGoogle();
+    const authState = useAuthStore.getState();
+    if (authState.isAuthenticated && authState.user) {
+      setAppMode('cloud');
+      setIsUploadPromptOpen(true);
+      showToast({
+        type: 'success',
+        message: `Connected ${authState.user.email}. Cloud backup features are now active.`,
+      });
+    }
+  };
+
+  const handleUploadFirstSnapshot = async () => {
+    const activeUser = useAuthStore.getState().user;
+    if (!activeUser?.sub) return;
+    setIsUploadingFirstSnapshot(true);
+    try {
+      const res = await pushToGoogleDrive(activeUser.sub);
+      setIsUploadPromptOpen(false);
+      showToast({
+        type: 'success',
+        message: `Uploaded initial snapshot (${res.filename || 'RentFlow Backup'}) to Google Drive.`,
+      });
+    } catch (err: unknown) {
+      const msg =
+        typeof err === 'string'
+          ? err
+          : (err as { message?: string })?.message || 'Could not upload initial snapshot to Google Drive.';
+      showToast({ type: 'error', message: msg });
+    } finally {
+      setIsUploadingFirstSnapshot(false);
+    }
+  };
+
   const handleToggleStartup = async () => {
     const nextState = !launchAtStartup;
     setIsUpdatingStartup(true);
     try {
-      if (isTauri()) {
-        const confirmedState = await tauriSetAutostartEnabled(nextState);
-        setLaunchAtStartup(confirmedState);
-        void databaseService.saveSetting('launchAtStartup', confirmedState);
-        showToast({
-          type: 'success',
-          message: confirmedState
-            ? 'RentFlow will launch automatically on Windows startup.'
-            : 'Windows startup launch disabled.',
-        });
-      } else {
-        setLaunchAtStartup(nextState);
-        void databaseService.saveSetting('launchAtStartup', nextState);
-        showToast({
-          type: 'info',
-          message: nextState
-            ? 'Startup launch preference enabled (applies inside the Windows desktop app).'
-            : 'Startup launch preference disabled.',
-        });
-      }
+      const confirmedState = await tauriSetAutostartEnabled(nextState);
+      setLaunchAtStartup(confirmedState);
+      void databaseService.saveSetting('launchAtStartup', confirmedState);
+      showToast({
+        type: 'success',
+        message: confirmedState
+          ? 'RentFlow will launch automatically on Windows startup.'
+          : 'Windows startup launch disabled.',
+      });
     } catch (err: unknown) {
       const msg =
         typeof err === 'string'
@@ -137,6 +176,79 @@ export const SettingsGeneral: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {/* Storage & Cloud Mode Upgrade Card */}
+      <Card className="space-y-4">
+        <CardHeader className="mb-1">
+          <div>
+            <div className="flex items-center gap-2">
+              <Cloud className="w-4 h-4 text-[var(--accent)]" />
+              <CardTitle>Google Drive Cloud Backup</CardTitle>
+            </div>
+            <CardDescription>
+              {appMode === 'cloud' && user
+                ? 'Encrypted cloud backup and versioned snapshot history are active.'
+                : 'Currently running in Offline & Private mode. Link your Google account to enable encrypted backups.'}
+            </CardDescription>
+          </div>
+          <span className="text-xs font-medium text-[var(--text-secondary)] whitespace-nowrap">
+            {appMode === 'cloud' && user ? 'Cloud Mode' : 'Offline Mode'}
+          </span>
+        </CardHeader>
+
+        {appMode === 'local' || !user ? (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-3 border-t border-[var(--border-subtle)]">
+            <div className="space-y-1">
+              <div className="text-xs font-semibold text-[var(--text-primary)]">
+                Upgrade to Encrypted Cloud Backup
+              </div>
+              <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed max-w-xl">
+                Sign in with Google to unlock automatic backups to your visible{' '}
+                <code className="font-mono">RentFlow Backups</code> folder and restore snapshots across devices.
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              onClick={() => void handleLinkGoogleDrive()}
+              disabled={isAuthenticating}
+              className="shrink-0 gap-2 whitespace-nowrap cursor-pointer"
+            >
+              {isAuthenticating ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>Linking Google...</span>
+                </>
+              ) : (
+                <>
+                  <Cloud className="w-3.5 h-3.5" />
+                  <span>Link Google Drive</span>
+                </>
+              )}
+            </Button>
+          </div>
+        ) : (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-3 border-t border-[var(--border-subtle)]">
+            <div className="flex items-center gap-2.5 text-xs text-[var(--text-secondary)]">
+              <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>
+                Linked Account:{' '}
+                <strong className="text-[var(--text-primary)]">{user.email}</strong>
+              </span>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => navigate('/sync')}
+              className="shrink-0 whitespace-nowrap"
+            >
+              Manage Snapshots
+            </Button>
+          </div>
+        )}
+      </Card>
+
       {/* System & Desktop Startup Preferences */}
       <Card className="space-y-4">
         <CardHeader className="mb-2">
@@ -357,6 +469,56 @@ export const SettingsGeneral: React.FC = () => {
           </Button>
         </form>
       </Card>
+
+      {/* Prompt to Upload First Snapshot after linking Google Drive */}
+      <Modal
+        isOpen={isUploadPromptOpen}
+        onClose={() => {
+          if (!isUploadingFirstSnapshot) {
+            setIsUploadPromptOpen(false);
+          }
+        }}
+        title="Upload Current Database to Google Drive?"
+        maxWidth="md"
+      >
+        <div className="space-y-4">
+          <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+            Your Google account is now linked. Would you like to upload your existing local SQLite database as your
+            first encrypted snapshot in your <code className="font-mono">RentFlow Backups</code> folder?
+          </p>
+          <div className="flex justify-end gap-2.5 pt-3 border-t border-[var(--border-subtle)]">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={isUploadingFirstSnapshot}
+              onClick={() => setIsUploadPromptOpen(false)}
+            >
+              Skip for Now
+            </Button>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              disabled={isUploadingFirstSnapshot}
+              onClick={() => void handleUploadFirstSnapshot()}
+              className="gap-1.5 whitespace-nowrap"
+            >
+              {isUploadingFirstSnapshot ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>Uploading Snapshot...</span>
+                </>
+              ) : (
+                <>
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Upload First Snapshot</span>
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };

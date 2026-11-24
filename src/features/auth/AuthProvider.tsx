@@ -1,10 +1,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useAuthStore, UserProfile } from '../../stores/authStore';
-import {
-  isTauri as detectTauri,
-  tauriDrivePullBackup,
-  tauriGoogleLogin,
-} from '../../lib/tauri/bridge';
+import { AuthResponse } from '../../lib/tauri/bridge';
 import { useToast } from '../../components/toast/ToastContext';
 
 interface AuthContextValue {
@@ -42,28 +39,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [setAuthenticating]);
 
   const loginWithGoogle = useCallback(async () => {
-    if (!detectTauri()) {
-      const msg = 'Please open the desktop app to log in.';
-      setAuthenticating(false, msg);
-      showToast({ type: 'error', message: msg });
-      return;
-    }
-
     setAuthenticating(true, null);
 
     try {
-      setStatusText('Opening your default browser for Google Sign-In...');
-      const authResponse = await tauriGoogleLogin();
+      setStatusText('Waiting for Google account authorization...');
+      const authResponse = await invoke<AuthResponse>('google_login');
 
       if (!authResponse || !authResponse.email) {
         throw new Error('Google sign-in returned an incomplete user profile.');
-      }
-
-      setStatusText('Authenticated! Checking Google Drive appDataFolder for encrypted backup...');
-      try {
-        await tauriDrivePullBackup(authResponse.id);
-      } catch (backupErr) {
-        console.warn('[Desktop Backup Pull] Non-fatal backup check notice:', backupErr);
       }
 
       setGoogleSession({

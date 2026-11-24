@@ -1,25 +1,30 @@
-import { encryptWithGoogleId, decryptWithGoogleId } from './driveCrypto';
+import { invoke } from '@tauri-apps/api/core';
 import { db } from '../db/client';
 import { useAuthStore } from '../stores/authStore';
 import { useThemeStore, ColorPalette, applyThemeToDOM } from '../stores/themeStore';
 import { usePackStore } from '../countries/usePack';
 import { useUIStore, UILayout } from '../stores/uiStore';
 import { useAppSettingsStore } from '../stores/appSettingsStore';
-import { Property, Tenant } from '../db/schema';
-import { isTauri, tauriDbExportAll, tauriDrivePullBackup, tauriDrivePushBackup } from './tauri/bridge';
+import { BackupManifestEntry, TauriPullResult, TauriSyncResult } from './tauri/bridge';
 
+export type { BackupManifestEntry };
 export const APP_DATA_BACKUP_FILENAME = 'RentFlow_FullBackup.enc';
 export const LEGACY_BACKUP_FILENAME = 'RentFlowBackup.enc';
+export const DRIVE_MANIFEST_FILENAME = 'manifest.json';
 
-export interface DriveFileItem {
-  id: string;
-  name: string;
-  modifiedTime?: string;
-}
-
-export interface DriveFileListResponse {
-  files: DriveFileItem[];
-}
+export const CORE_PORTFOLIO_TABLES = [
+  'properties',
+  'units',
+  'tenants',
+  'leases',
+  'invoices',
+  'payments',
+  'expenses',
+  'vendors',
+  'maintenance_requests',
+  'owners',
+  'documents',
+] as const;
 
 export interface AppSettingsState {
   currency: string;
@@ -64,17 +69,6 @@ export interface FullBackupPayload {
   maintenance_requests?: any[];
   documents?: any[];
   [key: string]: any;
-}
-
-export function isNonOAuthToken(accessToken?: string | null): boolean {
-  if (!accessToken || accessToken === 'undefined' || accessToken === 'null') {
-    return true;
-  }
-  return (
-    accessToken.startsWith('mock') ||
-    accessToken.startsWith('demo_') ||
-    accessToken.startsWith('tauri_')
-  );
 }
 
 /**
@@ -173,327 +167,37 @@ export function applyRestoredSettingsAndThemes(parsed: any) {
   }
 }
 
-export async function findDriveBackupFileItem(accessToken: string): Promise<DriveFileItem | null> {
-  if (isNonOAuthToken(accessToken)) {
-    return null;
-  }
-
-  const primaryUrl = `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name%3D%27${APP_DATA_BACKUP_FILENAME}%27%20and%20trashed%3Dfalse&fields=files(id%2Cname%2CmodifiedTime)`;
-
-  try {
-    const res = await fetch(primaryUrl, {
-      method: 'GET',
-      headers: { Authorization: 'Bearer ' + accessToken },
-    });
-
-    if (res.status === 401) {
-      console.warn('[Google Drive API] HTTP 401 Unauthorized');
-      return null;
-    }
-
-    if (res.ok) {
-      const data: DriveFileListResponse = await res.json();
-      if (data.files && data.files.length > 0) {
-        return data.files[0];
-      }
-    }
-
-    const legacyUrl = `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name%3D%27${LEGACY_BACKUP_FILENAME}%27%20and%20trashed%3Dfalse&fields=files(id%2Cname%2CmodifiedTime)`;
-    const legacyRes = await fetch(legacyUrl, {
-      method: 'GET',
-      headers: { Authorization: 'Bearer ' + accessToken },
-    });
-
-    if (legacyRes.ok) {
-      const legacyData: DriveFileListResponse = await legacyRes.json();
-      if (legacyData.files && legacyData.files.length > 0) {
-        return legacyData.files[0];
-      }
-    }
-  } catch (err) {
-    console.error('[Google Drive API] Error searching appDataFolder:', err);
-  }
-  return null;
+export function isLocalDatabaseEmpty(): boolean {
+  return CORE_PORTFOLIO_TABLES.every((table) => db.getTable(table).length === 0);
 }
 
-export async function findDriveBackupFile(accessToken: string): Promise<string | null> {
-  const item = await findDriveBackupFileItem(accessToken);
-  return item ? item.id : null;
+let suppressAutoSyncWrite = false;
+
+export function isAutoSyncWriteSuppressed(): boolean {
+  return suppressAutoSyncWrite;
 }
 
-export async function uploadEncryptedBackupToDrive(
-  accessToken: string,
-  existingFileId: string | null,
-  encryptedBytes: Uint8Array
-): Promise<{ fileId: string; syncedAt: string }> {
-  if (isNonOAuthToken(accessToken)) {
-    throw new Error('Cloud sync paused: Invalid or missing Google access token.');
-  }
+async function hydrateClientFromSqlite(): Promise<number> {
+  const snapshot = await invoke<Record<string, any[]>>('db_export_all');
+  await db.wipeAllDataAsync();
+  await db.importAllDataAsync(snapshot, false);
+  applyRestoredSettingsAndThemes(snapshot);
 
-  const formData = new FormData();
-  let endpointUrl = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
-  let method = 'POST';
+  const totalRecords = Object.values(snapshot || {}).reduce(
+    (sum, rows) => sum + (Array.isArray(rows) ? rows.length : 0),
+    0
+  );
 
-  if (existingFileId) {
-    endpointUrl = `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=multipart`;
-    method = 'PATCH';
-    formData.append(
-      'metadata',
-      new Blob([JSON.stringify({ name: APP_DATA_BACKUP_FILENAME })], { type: 'application/json' })
-    );
-  } else {
-    formData.append(
-      'metadata',
-      new Blob([JSON.stringify({ name: APP_DATA_BACKUP_FILENAME, parents: ['appDataFolder'] })], {
-        type: 'application/json',
-      })
-    );
-  }
-
-  const fileBlob = new Blob([encryptedBytes.buffer as ArrayBuffer], { type: 'application/octet-stream' });
-  formData.append('file', fileBlob);
-
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-    throw new Error('Offline: Unable to upload encrypted backup while offline.');
-  }
-
-  const res = await fetch(endpointUrl, {
-    method,
-    headers: { Authorization: 'Bearer ' + accessToken },
-    body: formData,
-  });
-
-  if (res.status === 401) {
-    throw new Error('Cloud sync paused: Google session expired. Please sign in again.');
-  }
-
-  const responseText = await res.text();
-  if (!res.ok) {
-    throw new Error(`Google Drive Upload Failed (HTTP ${res.status}): ${responseText}`);
-  }
-
-  let fileId = existingFileId || '';
-  try {
-    const jsonRes = JSON.parse(responseText);
-    if (jsonRes.id) {
-      fileId = jsonRes.id;
-    }
-  } catch {
-    // ignore
-  }
-
-  return { fileId, syncedAt: new Date().toISOString() };
-}
-
-export async function downloadEncryptedBackupFromDrive(
-  accessToken: string,
-  fileId: string
-): Promise<Uint8Array | null> {
-  if (isNonOAuthToken(accessToken)) {
-    return null;
-  }
-
-  const downloadUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
-
-  try {
-    const res = await fetch(downloadUrl, {
-      method: 'GET',
-      headers: { Authorization: 'Bearer ' + accessToken },
-    });
-
-    if (!res.ok) {
-      return null;
-    }
-
-    const arrayBuffer = await res.arrayBuffer();
-    if (arrayBuffer.byteLength === 0) return null;
-
-    return new Uint8Array(arrayBuffer);
-  } catch {
-    return null;
-  }
-}
-
-export async function backupToDrive(
-  accessToken?: string | null,
-  googleId?: string | null
-): Promise<{ fileId: string; syncedAt: string; totalRecords: number }> {
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-    throw new Error('Offline: Connect to the internet to push backup to Google Drive.');
-  }
-
-  const user = useAuthStore.getState().user;
-  const gId = googleId || user?.sub;
-
-  if (!gId) {
-    throw new Error('Cannot backup to Google Drive: User is not authenticated.');
-  }
-
-  if (isTauri()) {
-    const res = await tauriDrivePushBackup(gId);
-    useAppSettingsStore.getState().setLastDriveSync(res.synced_at);
-    if (res.file_id) {
-      useAppSettingsStore.getState().setDriveFileId(res.file_id);
-    }
-    return {
-      fileId: res.file_id || '',
-      syncedAt: res.synced_at,
-      totalRecords: 0,
-    };
-  }
-
-  const token = accessToken || useAuthStore.getState().accessToken;
-  if (!token) {
-    throw new Error('Cannot backup to Google Drive: Native desktop OAuth session required.');
-  }
-
-  const tables = db.exportAllData();
-  const settings = collectAppSettings();
-  const themes = collectAppTheme();
-
-  let totalRecords = 0;
-  for (const rows of Object.values(tables)) {
-    if (Array.isArray(rows)) {
-      totalRecords += rows.length;
-    }
-  }
-
-  const fullPayload: FullBackupPayload = {
-    app: 'RentFlow',
-    version: '2.0.0',
-    backupType: 'full_application_state',
-    exportedAt: new Date().toISOString(),
-    userId: gId,
-    userEmail: user?.email || '',
-    tables,
-    data: tables,
-    settings,
-    themes,
-    properties: tables.properties || [],
-    units: tables.units || [],
-    tenants: tables.tenants || [],
-    leases: tables.leases || [],
-    invoices: tables.invoices || [],
-    payments: tables.payments || [],
-    expenses: tables.expenses || [],
-    vendors: tables.vendors || [],
-    maintenance: tables.maintenance_requests || [],
-    maintenance_requests: tables.maintenance_requests || [],
-    documents: tables.documents || [],
-  };
-
-  const payloadString = JSON.stringify(fullPayload);
-  const encryptedBytes = await encryptWithGoogleId(payloadString, gId);
-
-  let existingFileId =
-    useAuthStore.getState().driveFileId || useAppSettingsStore.getState().driveFileId;
-
-  if (!existingFileId) {
-    existingFileId = await findDriveBackupFile(token);
-  }
-
-  const result = await uploadEncryptedBackupToDrive(token, existingFileId, encryptedBytes);
-
-  useAppSettingsStore.getState().setLastDriveSync(result.syncedAt);
-  if (result.fileId) {
-    useAppSettingsStore.getState().setDriveFileId(result.fileId);
-  }
-
-  return {
-    fileId: result.fileId,
-    syncedAt: result.syncedAt,
-    totalRecords,
-  };
-}
-
-export async function restoreFromDrive(
-  accessToken?: string | null,
-  googleId?: string | null
-): Promise<{ restored: boolean; message: string; totalRecords: number }> {
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-    throw new Error('Offline: Connect to the internet to restore backup from Google Drive.');
-  }
-
-  const user = useAuthStore.getState().user;
-  const gId = googleId || user?.sub;
-
-  if (!gId) {
-    throw new Error('Cannot restore from Google Drive: User is not authenticated.');
-  }
-
-  if (isTauri()) {
-    const result = await tauriDrivePullBackup(gId);
-    let totalRecords = 0;
-    if (result.restored) {
-      const snapshot = await tauriDbExportAll();
-      await db.wipeAllDataAsync();
-      await db.importAllDataAsync(snapshot, false);
-      applyRestoredSettingsAndThemes(snapshot);
-      totalRecords = Object.values(snapshot || {}).reduce(
-        (sum, rows) => sum + (Array.isArray(rows) ? rows.length : 0),
-        0
-      );
-      const syncedAt = new Date().toISOString();
-      useAppSettingsStore.getState().setLastDriveSync(syncedAt);
-      db.notifyWrite();
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(
-          new CustomEvent('rentflow:restored', {
-            detail: { totalRecords, timestamp: Date.now() },
-          })
-        );
-      }
-    }
-    return {
-      restored: result.restored,
-      message: result.message,
-      totalRecords,
-    };
-  }
-
-  const token = accessToken || useAuthStore.getState().accessToken;
-  if (!token) {
-    throw new Error('Cannot restore from Google Drive: Native desktop OAuth session required.');
-  }
-
-  const item = await findDriveBackupFileItem(token);
-  if (!item) {
-    return {
-      restored: false,
-      message: 'No Google Drive backup file found in appDataFolder.',
-      totalRecords: 0,
-    };
-  }
-
-  const encryptedBytes = await downloadEncryptedBackupFromDrive(token, item.id);
-  if (!encryptedBytes || encryptedBytes.length < 12) {
-    return {
-      restored: false,
-      message: 'Backup file on Google Drive is empty or unreadable.',
-      totalRecords: 0,
-    };
-  }
-
-  const decryptedJson = await decryptWithGoogleId(encryptedBytes, gId);
-  let parsed: any;
-  try {
-    parsed = JSON.parse(decryptedJson);
-  } catch {
-    throw new Error('Decrypted backup payload is corrupted or not valid JSON.');
-  }
-
-  if (!parsed || typeof parsed !== 'object') {
-    throw new Error('Decrypted backup payload has an unexpected structure.');
-  }
-
-  const totalRecords = await db.wipeAndRestoreAllDataAsync(parsed);
-  applyRestoredSettingsAndThemes(parsed);
-
-  const syncedAt = item.modifiedTime || new Date().toISOString();
+  const syncedAt = new Date().toISOString();
   useAppSettingsStore.getState().setLastDriveSync(syncedAt);
-  useAppSettingsStore.getState().setDriveFileId(item.id);
 
-  db.notifyWrite();
+  suppressAutoSyncWrite = true;
+  try {
+    db.notifyWrite();
+  } finally {
+    suppressAutoSyncWrite = false;
+  }
+
   if (typeof window !== 'undefined') {
     window.dispatchEvent(
       new CustomEvent('rentflow:restored', {
@@ -502,15 +206,119 @@ export async function restoreFromDrive(
     );
   }
 
+  return totalRecords;
+}
+
+export async function pushToGoogleDrive(
+  googleId?: string | null
+): Promise<{
+  fileId: string;
+  filename: string;
+  snapshotCount: number;
+  syncedAt: string;
+  totalRecords: number;
+}> {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    throw new Error('Offline: Connect to the internet to push backup to Google Drive.');
+  }
+
+  const gId = googleId || useAuthStore.getState().user?.sub;
+  if (!gId) {
+    throw new Error('Cannot backup to Google Drive: Please sign in with Google.');
+  }
+
+  const res = await invoke<TauriSyncResult>('drive_push_backup', { googleId: gId });
+  useAppSettingsStore.getState().setLastDriveSync(res.synced_at);
+  if (res.file_id) {
+    useAppSettingsStore.getState().setDriveFileId(res.file_id);
+  }
+
+  const tables = db.exportAllData();
+  const totalRecords = Object.values(tables).reduce(
+    (sum, rows) => sum + (Array.isArray(rows) ? rows.length : 0),
+    0
+  );
+
   return {
-    restored: true,
-    message: `Restored ${totalRecords} records across all modules from Google Drive!`,
+    fileId: res.file_id || '',
+    filename: res.filename || '',
+    snapshotCount: res.snapshot_count ?? 1,
+    syncedAt: res.synced_at,
+    totalRecords,
+  };
+}
+
+export async function backupToDrive(
+  _accessToken?: string | null,
+  googleId?: string | null
+): Promise<{ fileId: string; syncedAt: string; totalRecords: number }> {
+  const res = await pushToGoogleDrive(googleId);
+  return {
+    fileId: res.fileId,
+    syncedAt: res.syncedAt,
+    totalRecords: res.totalRecords,
+  };
+}
+
+export async function getBackupList(): Promise<BackupManifestEntry[]> {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    throw new Error('Offline: Connect to the internet to load Google Drive snapshots.');
+  }
+  return invoke<BackupManifestEntry[]>('get_backup_list');
+}
+
+export async function restoreFromSnapshot(
+  filename: string
+): Promise<{ restored: boolean; filename?: string; message: string; totalRecords: number }> {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    throw new Error('Offline: Connect to the internet to restore a snapshot from Google Drive.');
+  }
+
+  const result = await invoke<TauriPullResult>('restore_from_snapshot', { filename });
+  let totalRecords = 0;
+
+  if (result.restored) {
+    totalRecords = await hydrateClientFromSqlite();
+  }
+
+  return {
+    restored: result.restored,
+    filename: result.filename || filename,
+    message: result.message,
+    totalRecords,
+  };
+}
+
+export async function restoreFromDrive(
+  _accessToken?: string | null,
+  googleId?: string | null
+): Promise<{ restored: boolean; filename?: string; message: string; totalRecords: number }> {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    throw new Error('Offline: Connect to the internet to restore backup from Google Drive.');
+  }
+
+  const gId = googleId || useAuthStore.getState().user?.sub;
+  if (!gId) {
+    throw new Error('Cannot restore from Google Drive: Please sign in with Google.');
+  }
+
+  const result = await invoke<TauriPullResult>('drive_pull_backup', { googleId: gId });
+  let totalRecords = 0;
+
+  if (result.restored) {
+    totalRecords = await hydrateClientFromSqlite();
+  }
+
+  return {
+    restored: result.restored,
+    filename: result.filename,
+    message: result.message,
     totalRecords,
   };
 }
 
 export async function syncOnStartup(
-  accessToken: string,
+  _accessToken: string,
   googleId: string
 ): Promise<{ restored: boolean; message: string }> {
   try {
@@ -518,40 +326,11 @@ export async function syncOnStartup(
       return { restored: false, message: 'Offline: skipped startup cloud check' };
     }
 
-    if (isTauri()) {
-      const res = await tauriDrivePullBackup(googleId);
-      if (res.restored) {
-        const snapshot = await tauriDbExportAll();
-        await db.wipeAllDataAsync();
-        await db.importAllDataAsync(snapshot, false);
-        applyRestoredSettingsAndThemes(snapshot);
-        db.notifyWrite();
-      }
-      return res;
+    const res = await invoke<TauriPullResult>('drive_pull_backup', { googleId });
+    if (res.restored) {
+      await hydrateClientFromSqlite();
     }
-
-    const item = await findDriveBackupFileItem(accessToken);
-    if (!item) {
-      return { restored: false, message: 'No remote backup found' };
-    }
-
-    const localSyncTime = useAppSettingsStore.getState().lastDriveSync;
-    const properties = db.getTable<Property>('properties').filter((p) => !p.deleted_at);
-    const tenants = db.getTable<Tenant>('tenants').filter((t) => !t.deleted_at);
-    const isLocalEmpty = properties.length === 0 && tenants.length === 0;
-
-    const isRemoteNewer = Boolean(
-      item.modifiedTime &&
-        localSyncTime &&
-        new Date(item.modifiedTime).getTime() > new Date(localSyncTime).getTime()
-    );
-
-    if (!localSyncTime || isLocalEmpty || isRemoteNewer) {
-      const result = await restoreFromDrive(accessToken, googleId);
-      return result;
-    }
-
-    return { restored: false, message: 'Local database is current' };
+    return res;
   } catch (err: any) {
     console.warn('[syncOnStartup] Error:', err);
     return { restored: false, message: err.message || 'Sync check failed' };

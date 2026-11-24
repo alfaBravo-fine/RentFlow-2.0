@@ -43,23 +43,44 @@ import {
 
 type MapLayerType = 'streets' | 'satellite' | 'terrain';
 
-const TILE_SOURCES: Record<MapLayerType, { tiles: string[]; maxzoom: number; attribution: string }> = {
-  streets: {
-    tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-    maxzoom: 19,
-    attribution: '&copy; OpenStreetMap contributors',
-  },
-  satellite: {
-    tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
-    maxzoom: 19,
-    attribution: '&copy; Esri World Imagery',
-  },
-  terrain: {
-    tiles: ['https://a.tile.opentopomap.org/{z}/{x}/{y}.png'],
-    maxzoom: 17,
-    attribution: '&copy; OpenTopoMap contributors',
-  },
-};
+function getMapStyle(layer: MapLayerType): string | maplibregl.StyleSpecification {
+  const apiKey = import.meta.env.VITE_MAPTILER_API_KEY?.trim();
+
+  if (apiKey) {
+    switch (layer) {
+      case 'satellite':
+        return `https://api.maptiler.com/maps/hybrid/style.json?key=${apiKey}`;
+      case 'terrain':
+        return `https://api.maptiler.com/maps/outdoor-v2/style.json?key=${apiKey}`;
+      case 'streets':
+      default:
+        return `https://api.maptiler.com/maps/streets-v2/style.json?key=${apiKey}`;
+    }
+  }
+
+  // Fallback raster style if VITE_MAPTILER_API_KEY is not configured
+  return {
+    version: 8,
+    sources: {
+      'fallback-osm': {
+        type: 'raster',
+        tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+        tileSize: 256,
+        maxzoom: 19,
+        attribution: '&copy; OpenStreetMap contributors',
+      },
+    },
+    layers: [
+      {
+        id: 'fallback-osm-layer',
+        type: 'raster',
+        source: 'fallback-osm',
+        minzoom: 0,
+        maxzoom: 22,
+      },
+    ],
+  };
+}
 
 export const MapView: React.FC = () => {
   const navigate = useNavigate();
@@ -84,7 +105,9 @@ export const MapView: React.FC = () => {
   const [properties, setProperties] = useState<Property[]>(() =>
     db.getTable<Property>('properties').filter((p) => !p.deleted_at && !(p as any).deletedAt)
   );
-  const units = db.getTable<Unit>('units').filter((u) => !u.deleted_at && !(u as any).deletedAt);
+  const [units, setUnits] = useState<Unit[]>(() =>
+    db.getTable<Unit>('units').filter((u) => !u.deleted_at && !(u as any).deletedAt)
+  );
 
   // Map state persistence (lat, lng, zoom) via centralized appSettingsStore
   const storedMapPos = useAppSettingsStore.getState().mapPosition;
@@ -125,10 +148,11 @@ export const MapView: React.FC = () => {
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
   const [propertyToDelete, setPropertyToDelete] = useState<Property | null>(null);
 
-  // Subscribe to reactive database changes (e.g. when properties are added or edited)
+  // Subscribe to reactive database changes (e.g. when properties or units are added/edited)
   useEffect(() => {
     const unsub = db.onWrite(() => {
-      setProperties(db.getTable<Property>('properties').filter((p) => !p.deleted_at));
+      setProperties(db.getTable<Property>('properties').filter((p) => !p.deleted_at && !(p as any).deletedAt));
+      setUnits(db.getTable<Unit>('units').filter((u) => !u.deleted_at && !(u as any).deletedAt));
     });
     return unsub;
   }, []);
@@ -137,7 +161,7 @@ export const MapView: React.FC = () => {
   useEffect(() => {
     let isCancelled = false;
     const healAndGeocodeAll = async () => {
-      const allProps = db.getTable<Property>('properties').filter((p) => !p.deleted_at);
+      const allProps = db.getTable<Property>('properties').filter((p) => !p.deleted_at && !(p as any).deletedAt);
       let hasChanged = false;
 
       for (const p of allProps) {
@@ -188,7 +212,7 @@ export const MapView: React.FC = () => {
   const fitToAllProperties = () => {
     const map = mapRef.current;
     if (!map) return;
-    const allProps = db.getTable<Property>('properties').filter((p) => !p.deleted_at);
+    const allProps = db.getTable<Property>('properties').filter((p) => !p.deleted_at && !(p as any).deletedAt);
     const validCoords: [number, number][] = [];
     allProps.forEach((p) => {
       const rawLat = p.latitude ?? p.lat;
@@ -253,29 +277,20 @@ export const MapView: React.FC = () => {
 
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
-      style: {
-        version: 8,
-        sources: {
-          'raster-tiles': {
-            type: 'raster',
-            tiles: TILE_SOURCES[activeLayer].tiles,
-            tileSize: 256,
-            maxzoom: TILE_SOURCES[activeLayer].maxzoom,
-            attribution: TILE_SOURCES[activeLayer].attribution,
-          },
-        },
-        layers: [
-          {
-            id: 'raster-layer',
-            type: 'raster',
-            source: 'raster-tiles',
-            minzoom: 0,
-            maxzoom: 22,
-          },
-        ],
-      },
+      style: getMapStyle(activeLayer),
       center: initialCenter,
       zoom: initialZoom,
+    });
+
+    if (!import.meta.env.VITE_MAPTILER_API_KEY?.trim()) {
+      showToast({
+        type: 'info',
+        message: 'VITE_MAPTILER_API_KEY is not set — using fallback OpenStreetMap tiles.',
+      });
+    }
+
+    map.on('error', (err) => {
+      console.warn('[MapView] MapLibre warning:', err?.error || err);
     });
 
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
@@ -379,26 +394,7 @@ export const MapView: React.FC = () => {
     const map = mapRef.current;
     if (!map) return;
 
-    if (map.getSource('raster-tiles')) {
-      if (map.getLayer('raster-layer')) {
-        map.removeLayer('raster-layer');
-      }
-      map.removeSource('raster-tiles');
-      map.addSource('raster-tiles', {
-        type: 'raster',
-        tiles: TILE_SOURCES[layer].tiles,
-        tileSize: 256,
-        maxzoom: TILE_SOURCES[layer].maxzoom,
-        attribution: TILE_SOURCES[layer].attribution,
-      });
-      map.addLayer({
-        id: 'raster-layer',
-        type: 'raster',
-        source: 'raster-tiles',
-        minzoom: 0,
-        maxzoom: 22,
-      });
-    }
+    map.setStyle(getMapStyle(layer));
 
     const center = map.getCenter();
     const zoom = map.getZoom();
@@ -648,21 +644,22 @@ export const MapView: React.FC = () => {
       <div ref={mapContainerRef} className="w-full h-full" />
 
       {/* Floating Top-Left Search & Filter Card (Rounded Minimalism) */}
-      <div className="absolute top-4 left-4 z-20 w-80 sm:w-96 rounded-2xl bg-[var(--bg-surface)]/95 backdrop-blur-md border border-[var(--border-strong)] p-4 modal-shadow space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
+      <div className="absolute top-4 left-4 z-20 w-[340px] sm:w-[420px] max-w-[calc(100%-2rem)] rounded-2xl bg-[var(--bg-surface)]/95 backdrop-blur-md border border-[var(--border-strong)] p-4 modal-shadow space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
             <div className="w-7 h-7 rounded-xl bg-[var(--accent)] text-white flex items-center justify-center shrink-0">
               <MapPin className="w-3.5 h-3.5" />
             </div>
-            <div>
-              <h3 className="text-xs font-bold text-[var(--text-primary)]">Portfolio Map</h3>
-              <p className="text-[10px] text-[var(--text-secondary)]">{properties.length} Active Pins</p>
+            <div className="min-w-0">
+              <h3 className="text-xs font-bold text-[var(--text-primary)] truncate">Portfolio Map</h3>
+              <p className="text-[10px] text-[var(--text-secondary)] truncate">{properties.length} Active Pins</p>
             </div>
           </div>
 
           {/* Layer switcher */}
-          <div className="flex items-center p-1 rounded-xl bg-[var(--bg-base)] border border-[var(--border-subtle)] text-[11px]">
+          <div className="flex items-center p-1 rounded-xl bg-[var(--bg-base)] border border-[var(--border-subtle)] text-[11px] shrink-0">
             <button
+              type="button"
               onClick={() => handleLayerSwitch('streets')}
               className={`px-2 py-0.5 rounded-lg font-medium transition-colors cursor-pointer ${
                 activeLayer === 'streets'
@@ -673,6 +670,7 @@ export const MapView: React.FC = () => {
               Streets
             </button>
             <button
+              type="button"
               onClick={() => handleLayerSwitch('satellite')}
               className={`px-2 py-0.5 rounded-lg font-medium transition-colors cursor-pointer ${
                 activeLayer === 'satellite'
@@ -680,9 +678,10 @@ export const MapView: React.FC = () => {
                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
               }`}
             >
-              Sat
+              Satellite
             </button>
             <button
+              type="button"
               onClick={() => handleLayerSwitch('terrain')}
               className={`px-2 py-0.5 rounded-lg font-medium transition-colors cursor-pointer ${
                 activeLayer === 'terrain'
@@ -693,6 +692,7 @@ export const MapView: React.FC = () => {
               Terrain
             </button>
             <button
+              type="button"
               onClick={fitToAllProperties}
               title="Fit map view to all property locations"
               className="px-2 py-0.5 rounded-lg font-semibold text-[var(--accent)] hover:bg-[var(--accent)] hover:text-white transition-colors cursor-pointer ml-0.5"

@@ -23,6 +23,7 @@ import {
   Check,
   Cloud,
   CloudOff,
+  UserCheck,
 } from '../icons';
 import { listAllPacks, getCountryPack } from '../../countries/resolver';
 import { usePackStore } from '../../countries/usePack';
@@ -45,6 +46,7 @@ export interface TopbarProps {
 
 export const Topbar: React.FC<TopbarProps> = ({ isDarkMode, onToggleTheme, onOpenSidebar }) => {
   const navigate = useNavigate();
+  const appMode = useAuthStore((s) => s.appMode);
   const user = useAuthStore((s) => s.user);
   const signOut = useAuthStore((s) => s.signOut);
   const [isCommandOpen, setIsCommandOpen] = useState(false);
@@ -500,10 +502,10 @@ export const Topbar: React.FC<TopbarProps> = ({ isDarkMode, onToggleTheme, onOpe
             {isDarkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
 
-          {/* Quiet Background Sync Indicator in Topbar */}
-          {user && (
+          {/* Cloud Sync Indicator (Cloud Mode Only) */}
+          {appMode === 'cloud' && user && (
             <div
-              className="flex items-center gap-1.5 px-2 py-1 rounded-xl bg-[var(--bg-base)] border border-[var(--border-subtle)] text-[11px] transition-all"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-[var(--bg-base)] border border-[var(--border-subtle)] text-[11px] transition-all"
               title={
                 isRestoring
                   ? 'Restoring database from Google Drive...'
@@ -511,18 +513,19 @@ export const Topbar: React.FC<TopbarProps> = ({ isDarkMode, onToggleTheme, onOpe
                   ? syncError || 'Cloud sync paused: Re-login required.'
                   : lastSyncedAt
                   ? `Last Synced: ${new Date(lastSyncedAt).toLocaleString()}`
-                  : 'Cloud Synced'
+                  : 'Synced to Drive'
               }
             >
               {isRestoring ? (
                 <>
                   <RefreshCw className="w-3.5 h-3.5 animate-spin text-[var(--accent)]" />
-                  <span className="hidden sm:inline text-[var(--text-secondary)] font-medium">Restoring...</span>
+                  <span className="hidden sm:inline text-[var(--text-secondary)] font-medium whitespace-nowrap">Restoring...</span>
                 </>
               ) : syncState === 'syncing' || syncState === 'pending' ? (
                 <>
+                  <Cloud className="w-3.5 h-3.5 text-[var(--accent)]" />
                   <RefreshCw className="w-3.5 h-3.5 animate-spin text-[var(--accent)]" />
-                  <span className="hidden sm:inline text-[var(--text-secondary)]">Syncing...</span>
+                  <span className="hidden sm:inline text-[var(--text-secondary)] whitespace-nowrap">Syncing...</span>
                 </>
               ) : syncState === 'synced' || syncState === 'idle' ? (
                 <>
@@ -530,24 +533,42 @@ export const Topbar: React.FC<TopbarProps> = ({ isDarkMode, onToggleTheme, onOpe
                     <Cloud className="w-4 h-4 text-emerald-600" />
                     <CheckCircle className="w-2.5 h-2.5 text-white fill-emerald-600 absolute -bottom-0.5 -right-0.5" />
                   </div>
-                  <span className="hidden sm:inline text-[var(--text-secondary)]">Synced</span>
+                  <span className="hidden sm:inline text-[var(--text-secondary)] whitespace-nowrap">Synced to Drive</span>
                 </>
               ) : syncState === 'error' ? (
                 <>
                   <CloudOff className="w-4 h-4 text-rose-600" />
-                  <span className="hidden sm:inline text-rose-600 font-semibold">Sync Paused</span>
+                  <span className="hidden sm:inline text-rose-600 font-semibold whitespace-nowrap">Sync Paused</span>
                 </>
               ) : null}
             </div>
           )}
 
-          {/* User Profile / Circular Avatar */}
-          {user ? (
+          {/* User Profile Area */}
+          {appMode === 'local' ? (
+            <div className="flex items-center gap-2.5 border-l border-[var(--border-subtle)] pl-2 sm:pl-3">
+              <div
+                className="w-9 h-9 rounded-full bg-[var(--bg-surface-sunken)] border border-[var(--border-strong)] text-[var(--text-primary)] flex items-center justify-center shrink-0"
+                title="Local Admin · Offline Mode"
+              >
+                <UserCheck className="w-4 h-4" />
+              </div>
+              <div className="hidden lg:flex flex-col text-left">
+                <span className="text-xs font-semibold text-[var(--text-primary)] whitespace-nowrap">
+                  Local Admin
+                </span>
+                <span className="text-[10px] text-[var(--text-secondary)] whitespace-nowrap">
+                  Offline Mode
+                </span>
+              </div>
+            </div>
+          ) : user ? (
             <div className="flex items-center gap-2 border-l border-[var(--border-subtle)] pl-2 sm:pl-3">
               {user.picture ? (
                 <img
                   src={user.picture}
                   alt={user.name}
+                  referrerPolicy="no-referrer"
                   className="w-9 h-9 rounded-full object-cover ring-1 ring-[var(--border-subtle)] shrink-0 shadow-xs"
                 />
               ) : (

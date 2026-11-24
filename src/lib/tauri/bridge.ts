@@ -1,22 +1,19 @@
 /**
  * RentFlow Tauri v2 Desktop Bridge
- * Seamlessly interfaces React frontend with the Rust backend (SQLite & Loopback OAuth)
- * when running inside Tauri, with graceful non-Tauri memory fallback for tests.
+ * Dedicated native desktop IPC bridge interfacing React with the Rust backend
+ * (SQLite, Google OAuth loopback, Google Drive sync, Native Dialogs, and OS Autostart).
  */
 
+import { invoke } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-dialog';
 import { Invoice, Lease, Payment, Property, Tenant, Unit } from '../../db/schema';
 
 export function isTauri(): boolean {
-  return typeof window !== 'undefined' && Boolean((window as any).__TAURI_INTERNALS__);
+  return typeof window !== 'undefined';
 }
 
 async function invokeTauri<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  if (typeof window === 'undefined' || !(window as any).__TAURI_INTERNALS__) {
-    throw new Error(`Tauri is not available in browser mode. Command '${cmd}' skipped.`);
-  }
-
   try {
-    const { invoke } = await import('@tauri-apps/api/core');
     return await invoke<T>(cmd, args);
   } catch (err: any) {
     console.error(`[Tauri Bridge] Error invoking command '${cmd}':`, err);
@@ -24,7 +21,11 @@ async function invokeTauri<T>(cmd: string, args?: Record<string, unknown>): Prom
   }
 }
 
-// --- Database Operations (SQLite / SQLCipher AES-256) ---
+// --- Database Operations (SQLite) ---
+
+export async function tauriDbInit(): Promise<string> {
+  return invokeTauri<string>('db_init');
+}
 
 export async function tauriDbGetTable<T>(tableName: string): Promise<T[]> {
   return invokeTauri<T[]>('db_get_table', { tableName });
@@ -255,7 +256,7 @@ export async function tauriAddCredit(credit: any): Promise<any> {
   return invokeTauri<any>('add_credit', { credit });
 }
 
-// --- Settings & Path ---
+// --- Settings, Data Path & Migration ---
 export async function tauriGetSettings(): Promise<Record<string, any>> {
   return invokeTauri<Record<string, any>>('get_settings');
 }
@@ -270,6 +271,28 @@ export async function tauriSaveSettings(settings: Record<string, any>): Promise<
 
 export async function tauriGetAppDataPath(): Promise<string> {
   return invokeTauri<string>('get_app_data_path');
+}
+
+export async function tauriGetDataPath(): Promise<string> {
+  return invokeTauri<string>('get_data_path');
+}
+
+export async function tauriSetDataPath(path: string): Promise<string> {
+  return invokeTauri<string>('set_data_path', { path });
+}
+
+export async function tauriMigrateDatabase(newPath: string): Promise<string> {
+  return invokeTauri<string>('migrate_database', { newPath });
+}
+
+export async function tauriPickDirectory(title?: string, defaultPath?: string): Promise<string | null> {
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title: title || 'Select Folder',
+    defaultPath: defaultPath || undefined,
+  });
+  return typeof selected === 'string' && selected.trim() ? selected : null;
 }
 
 // --- Production Google OAuth (Desktop Loopback) ---
@@ -299,38 +322,56 @@ export async function tauriGoogleGetCurrentUser(): Promise<AuthResponse | null> 
   return invokeTauri<AuthResponse | null>('google_get_current_user');
 }
 
-// --- Google Drive Sync (Push/Pull in Rust Backend) ---
+// --- Google Drive Sync (Versioned Snapshots & Manifest in Rust Backend) ---
+
+export interface BackupManifestEntry {
+  filename: string;
+  date: string;
+  size: string;
+  size_bytes?: number;
+  file_id?: string;
+  record_count?: number;
+}
 
 export interface TauriSyncResult {
   success: boolean;
   synced_at: string;
   file_id?: string;
+  filename?: string;
+  snapshot_count?: number;
   message: string;
 }
 
 export interface TauriPullResult {
   restored: boolean;
+  filename?: string;
   message: string;
 }
 
-export async function tauriDrivePushBackup(googleId: string): Promise<TauriSyncResult> {
-  return invokeTauri<TauriSyncResult>('drive_push_backup', { googleId });
+export async function tauriDrivePushBackup(googleId?: string): Promise<TauriSyncResult> {
+  return invokeTauri<TauriSyncResult>('drive_push_backup', googleId ? { googleId } : undefined);
 }
 
-export async function tauriDrivePullBackup(googleId: string): Promise<TauriPullResult> {
-  return invokeTauri<TauriPullResult>('drive_pull_backup', { googleId });
+export async function tauriDrivePullBackup(googleId?: string): Promise<TauriPullResult> {
+  return invokeTauri<TauriPullResult>('drive_pull_backup', googleId ? { googleId } : undefined);
+}
+
+export async function tauriGetBackupList(): Promise<BackupManifestEntry[]> {
+  return invokeTauri<BackupManifestEntry[]>('get_backup_list');
+}
+
+export async function tauriRestoreFromSnapshot(filename: string): Promise<TauriPullResult> {
+  return invokeTauri<TauriPullResult>('restore_from_snapshot', { filename });
 }
 
 // --- Desktop Autostart (tauri-plugin-autostart) ---
 
 export async function tauriGetAutostartEnabled(): Promise<boolean> {
-  if (!isTauri()) return false;
   const { isEnabled } = await import('@tauri-apps/plugin-autostart');
   return await isEnabled();
 }
 
 export async function tauriSetAutostartEnabled(enabled: boolean): Promise<boolean> {
-  if (!isTauri()) return enabled;
   const { enable, disable, isEnabled } = await import('@tauri-apps/plugin-autostart');
   if (enabled) {
     await enable();
@@ -341,11 +382,5 @@ export async function tauriSetAutostartEnabled(enabled: boolean): Promise<boolea
 }
 
 export async function tauriRestartApp(): Promise<void> {
-  if (!isTauri()) {
-    if (typeof window !== 'undefined') {
-      window.location.reload();
-    }
-    return;
-  }
   await invokeTauri<void>('restart_app');
 }

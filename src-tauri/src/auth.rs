@@ -68,6 +68,7 @@ pub struct AuthState {
     pub user_profile: Mutex<Option<AuthResponse>>,
     pub drive_file_id: Mutex<Option<String>>,
     pub store_dir: Mutex<Option<PathBuf>>,
+    pub sync_lock: tokio::sync::Mutex<()>,
 }
 
 impl Default for AuthState {
@@ -78,8 +79,24 @@ impl Default for AuthState {
             user_profile: Mutex::new(None),
             drive_file_id: Mutex::new(None),
             store_dir: Mutex::new(None),
+            sync_lock: tokio::sync::Mutex::new(()),
         }
     }
+}
+
+pub fn get_authenticated_google_id(state: &AuthState) -> Result<String, String> {
+    let profile = state
+        .user_profile
+        .lock()
+        .map_err(|e| format!("Failed to lock user_profile: {}", e))?
+        .clone()
+        .ok_or_else(|| "Not signed in with Google. Please sign in first.".to_string())?;
+
+    if profile.id.is_empty() || profile.id.contains('/') || profile.id.contains('\\') {
+        return Err("Invalid Google User ID in active session.".to_string());
+    }
+
+    Ok(profile.id)
 }
 
 fn save_persisted_session(app: &AppHandle, state: &AuthState) -> Result<(), String> {
@@ -369,7 +386,7 @@ pub async fn google_login(
             ("response_type", "code"),
             (
                 "scope",
-                "openid email profile https://www.googleapis.com/auth/drive.appdata",
+                "openid email profile https://www.googleapis.com/auth/drive.file",
             ),
             ("code_challenge", code_challenge.as_str()),
             ("code_challenge_method", "S256"),

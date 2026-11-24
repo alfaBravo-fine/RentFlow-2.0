@@ -4,9 +4,11 @@ import { Button } from '../../components/ui/Button';
 import { RefreshCw } from '../../components/icons';
 import { Logo } from '../../components/Logo';
 import { useAuth } from './AuthProvider';
+import { useAuthStore } from '../../stores/authStore';
 
 export const LoginView: React.FC = () => {
   const { isAuthenticating, statusText, loginWithGoogle } = useAuth();
+  const setAppMode = useAuthStore((s) => s.setAppMode);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--bg-base)] p-4 sm:p-6 overflow-y-auto">
@@ -16,22 +18,25 @@ export const LoginView: React.FC = () => {
           <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">
             RentFlow
           </h1>
+          <p className="text-xs text-[var(--text-secondary)] mt-1">
+            Sign in with Google to resume Cloud Backup
+          </p>
         </div>
 
-        <Card className="p-6 sm:p-8 space-y-6 text-left border border-[var(--border-strong)] rounded-2xl shadow-lg bg-[var(--bg-surface)]">
+        <Card className="p-6 sm:p-8 space-y-5 text-left border border-[var(--border-strong)] rounded-2xl shadow-lg bg-[var(--bg-surface)]">
           {isAuthenticating && (
             <div className="p-3.5 rounded-xl bg-[var(--accent)]/10 border border-[var(--accent)]/30 text-xs text-[var(--accent)] flex items-center gap-3">
               <RefreshCw className="w-4 h-4 animate-spin shrink-0" />
               <div className="min-w-0">
                 <strong className="block font-semibold">Connecting to Google...</strong>
                 <span className="text-[11px] opacity-90 block break-words">
-                  {statusText || 'Complete sign-in in your browser...'}
+                  {statusText || 'Complete Google authorization to continue...'}
                 </span>
               </div>
             </div>
           )}
 
-          <div className="pt-2">
+          <div className="pt-1 space-y-3">
             <Button
               type="button"
               variant="primary"
@@ -59,6 +64,15 @@ export const LoginView: React.FC = () => {
               </svg>
               <span>{isAuthenticating ? 'Connecting to Google...' : 'Sign in with Google'}</span>
             </Button>
+
+            <button
+              type="button"
+              onClick={() => setAppMode('local')}
+              disabled={isAuthenticating}
+              className="w-full py-2 text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
+            >
+              Continue in Offline &amp; Private Mode instead
+            </button>
           </div>
         </Card>
       </div>

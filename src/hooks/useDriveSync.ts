@@ -3,20 +3,18 @@ import { create } from 'zustand';
 import { useAuthStore } from '../stores/authStore';
 import { useAppSettingsStore } from '../stores/appSettingsStore';
 import { db } from '../db/client';
+import { BackupManifestEntry } from '../lib/tauri/bridge';
 import {
-  backupToDrive,
-  restoreFromDrive,
-  syncOnStartup,
-  isNonOAuthToken,
+  getBackupList as fetchDriveBackupList,
+  isAutoSyncWriteSuppressed,
+  pushToGoogleDrive as pushDriveSnapshot,
+  restoreFromDrive as pullLatestDriveBackup,
+  restoreFromSnapshot as restoreDriveSnapshot,
 } from '../lib/googleDriveService';
-import {
-  isTauri,
-  tauriDbExportAll,
-  tauriDrivePushBackup,
-  tauriDrivePullBackup,
-} from '../lib/tauri/bridge';
 
 export type SyncState = 'idle' | 'pending' | 'syncing' | 'synced' | 'error';
+
+const INSTANT_SYNC_DEBOUNCE_MS = 500;
 
 interface DriveSyncStore {
   syncState: SyncState;
@@ -37,8 +35,8 @@ const useDriveSyncStore = create<DriveSyncStore>((set) => ({
 }));
 
 export function useDriveSync() {
+  const appMode = useAuthStore((s) => s.appMode);
   const user = useAuthStore((s) => s.user);
-  const accessToken = useAuthStore((s) => s.accessToken);
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const lastSyncedAt = useAppSettingsStore((s) => s.lastDriveSync);
   const setLastDriveSync = useAppSettingsStore((s) => s.setLastDriveSync);
@@ -56,8 +54,7 @@ export function useDriveSync() {
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const triggerUpload = useCallback(async () => {
-    if (!user) return;
-    if (!isTauri() && !accessToken) return;
+    if (appMode !== 'cloud' || !user) return;
 
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
@@ -65,12 +62,6 @@ export function useDriveSync() {
     }
 
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-      setSyncState('idle');
-      setSyncError(null);
-      return;
-    }
-
-    if (!isTauri() && isNonOAuthToken(accessToken)) {
       setSyncState('idle');
       setSyncError(null);
       return;
@@ -88,24 +79,15 @@ export function useDriveSync() {
       setSyncState('syncing');
       setSyncError(null);
 
-      if (isTauri()) {
-        const result = await tauriDrivePushBackup(user.sub);
-        setSyncState('synced');
-        setSyncError(null);
-        setLastDriveSync(result.synced_at);
-        if (result.file_id) {
-          setDriveFileId(result.file_id);
-        }
-      } else {
-        const result = await backupToDrive(accessToken, user.sub);
-        setSyncState('synced');
-        setSyncError(null);
-        setLastDriveSync(result.syncedAt);
-        if (result.fileId) {
-          setDriveFileId(result.fileId);
-        }
+      const result = await pushDriveSnapshot(user.sub);
+      setSyncState('synced');
+      setSyncError(null);
+      setLastDriveSync(result.syncedAt);
+      if (result.fileId) {
+        setDriveFileId(result.fileId);
       }
       uploadSucceeded = true;
+      return result;
     } catch (err: unknown) {
       console.warn('[useDriveSync] Drive upload error:', err);
       const msg =
@@ -114,49 +96,42 @@ export function useDriveSync() {
           : (err as { message?: string })?.message || 'Auto-sync upload failed';
       setSyncState('error');
       setSyncError(msg);
+      throw err;
     } finally {
       isSyncingRef.current = false;
       if (hasQueuedSyncRef.current) {
         hasQueuedSyncRef.current = false;
         if (uploadSucceeded) {
-          void triggerUpload();
+          void triggerUpload().catch(() => {});
         }
       }
     }
-  }, [user, accessToken, setLastDriveSync, setDriveFileId, setSyncState, setSyncError]);
+  }, [appMode, user, setLastDriveSync, setDriveFileId, setSyncState, setSyncError]);
 
-  const triggerRestore = useCallback(async () => {
+  const getBackupList = useCallback(async (): Promise<BackupManifestEntry[]> => {
     if (!user) {
-      throw new Error('Please sign in with Google to restore your portfolio from Google Drive.');
+      throw new Error('Please sign in with Google to view cloud snapshots.');
     }
-    if (!isTauri() && !accessToken) {
-      throw new Error('Desktop Google OAuth session required for Drive restore.');
-    }
+    return fetchDriveBackupList();
+  }, [user]);
 
-    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-      throw new Error('You are currently offline. Connect to the internet to restore from Google Drive.');
-    }
+  const restoreFromSnapshot = useCallback(
+    async (filename: string) => {
+      if (!user) {
+        throw new Error('Please sign in with Google to restore a snapshot.');
+      }
 
-    setIsRestoring(true);
-    setSyncState('syncing');
-    setSyncError(null);
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
 
-    try {
-      if (isTauri()) {
-        const result = await tauriDrivePullBackup(user.sub);
-        if (result.restored) {
-          const snapshot = await tauriDbExportAll();
-          await db.importAllDataAsync(snapshot, false);
-          setSyncState('synced');
-          const syncedTime = useAppSettingsStore.getState().lastDriveSync || new Date().toISOString();
-          setLastDriveSync(syncedTime);
-        } else {
-          setSyncState('idle');
-        }
-        setSyncError(null);
-        return { restored: result.restored, message: result.message, totalRecords: 0 };
-      } else {
-        const result = await restoreFromDrive(accessToken, user.sub);
+      setIsRestoring(true);
+      setSyncState('syncing');
+      setSyncError(null);
+
+      try {
+        const result = await restoreDriveSnapshot(filename);
         if (result.restored) {
           setSyncState('synced');
           const syncedTime = useAppSettingsStore.getState().lastDriveSync || new Date().toISOString();
@@ -166,94 +141,85 @@ export function useDriveSync() {
         }
         setSyncError(null);
         return result;
+      } catch (err: unknown) {
+        const msg =
+          typeof err === 'string'
+            ? err
+            : (err as { message?: string })?.message || 'Snapshot restore failed';
+        setSyncState('error');
+        setSyncError(msg);
+        throw err;
+      } finally {
+        setIsRestoring(false);
       }
-    } catch (err: any) {
-      console.warn('[useDriveSync] Restore error:', err);
-      const msg = err?.message || 'Restore from Google Drive failed';
-      setSyncState('error');
-      setSyncError(msg);
-      throw err;
-    } finally {
-      setIsRestoring(false);
-    }
-  }, [user, accessToken, setLastDriveSync, setIsRestoring, setSyncState, setSyncError]);
+    },
+    [user, setLastDriveSync, setIsRestoring, setSyncState, setSyncError]
+  );
 
-  useEffect(() => {
-    if (!isAuthenticated || !user) return;
-    if (!isTauri() && (!accessToken || isNonOAuthToken(accessToken))) return;
+  const triggerRestore = useCallback(
+    async (filename?: string) => {
+      if (filename) {
+        return restoreFromSnapshot(filename);
+      }
 
-    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-      setIsRestoring(false);
-      setSyncState('idle');
+      if (!user) {
+        throw new Error('Please sign in with Google to restore your portfolio from Google Drive.');
+      }
+
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+
+      setIsRestoring(true);
+      setSyncState('syncing');
       setSyncError(null);
-      return;
-    }
 
-    let isMounted = true;
-    const runStartupSync = async () => {
       try {
-        setIsRestoring(true);
-        setSyncState('syncing');
-        setSyncError(null);
-
-        if (isTauri()) {
-          const result = await tauriDrivePullBackup(user.sub);
-          if (!isMounted) return;
-
-          if (result.restored) {
-            const snapshot = await tauriDbExportAll();
-            await db.importAllDataAsync(snapshot, false);
-            setSyncState('synced');
-            const syncedTime = useAppSettingsStore.getState().lastDriveSync || new Date().toISOString();
-            setLastDriveSync(syncedTime);
-          } else {
-            setSyncState('idle');
-          }
-        } else if (accessToken) {
-          const result = await syncOnStartup(accessToken, user.sub);
-          if (!isMounted) return;
-
-          if (result.restored) {
-            setSyncState('synced');
-            const syncedTime = useAppSettingsStore.getState().lastDriveSync || new Date().toISOString();
-            setLastDriveSync(syncedTime);
-          } else {
-            setSyncState('idle');
-          }
-        }
-      } catch (err: any) {
-        console.warn('[useDriveSync] Startup sync warning:', err);
-        if (isMounted) {
+        const result = await pullLatestDriveBackup(null, user.sub);
+        if (result.restored) {
+          setSyncState('synced');
+          const syncedTime = useAppSettingsStore.getState().lastDriveSync || new Date().toISOString();
+          setLastDriveSync(syncedTime);
+        } else {
           setSyncState('idle');
         }
+        setSyncError(null);
+        return result;
+      } catch (err: unknown) {
+        console.warn('[useDriveSync] Restore error:', err);
+        const msg =
+          typeof err === 'string'
+            ? err
+            : (err as { message?: string })?.message || 'Restore from Google Drive failed';
+        setSyncState('error');
+        setSyncError(msg);
+        throw err;
       } finally {
-        if (isMounted) {
-          setIsRestoring(false);
-        }
+        setIsRestoring(false);
       }
-    };
+    },
+    [user, restoreFromSnapshot, setLastDriveSync, setIsRestoring, setSyncState, setSyncError]
+  );
 
-    runStartupSync();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [isAuthenticated, user, accessToken, setLastDriveSync, setIsRestoring, setSyncState, setSyncError]);
-
+  // Instant 500ms debounced sync triggered immediately after any successful DB write (INSERT/UPDATE/DELETE)
   useEffect(() => {
-    if (!isAuthenticated || !user) return;
+    if (appMode !== 'cloud' || !isAuthenticated || !user) return;
 
     const unsubscribe = db.onWrite(() => {
+      if (isAutoSyncWriteSuppressed()) return;
       if (!useAppSettingsStore.getState().autoSyncEnabled) return;
+
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
       }
       setSyncState('pending');
       setSyncError(null);
+
       debounceTimerRef.current = setTimeout(() => {
         debounceTimerRef.current = null;
         void triggerUpload().catch(() => {});
-      }, 2000);
+      }, INSTANT_SYNC_DEBOUNCE_MS);
     });
 
     return () => {
@@ -263,15 +229,17 @@ export function useDriveSync() {
         debounceTimerRef.current = null;
       }
     };
-  }, [isAuthenticated, user, triggerUpload, setSyncState, setSyncError]);
+  }, [appMode, isAuthenticated, user, triggerUpload, setSyncState, setSyncError]);
 
   useEffect(() => {
-    if (!isAuthenticated || !user) return;
+    if (appMode !== 'cloud' || !isAuthenticated || !user) return;
 
     const handleBeforeUnload = () => {
       const autoSync = useAppSettingsStore.getState().autoSyncEnabled;
       const isOnline = typeof navigator === 'undefined' || navigator.onLine !== false;
-      if (autoSync && isOnline && !isSyncingRef.current && (isTauri() || !isNonOAuthToken(accessToken))) {
+      if (autoSync && isOnline && !isSyncingRef.current && debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
         void triggerUpload().catch(() => {});
       }
     };
@@ -280,7 +248,7 @@ export function useDriveSync() {
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
-  }, [isAuthenticated, user, accessToken, triggerUpload]);
+  }, [appMode, isAuthenticated, user, triggerUpload]);
 
   return {
     syncState,
@@ -288,7 +256,10 @@ export function useDriveSync() {
     syncError,
     isRestoring,
     syncNow: triggerUpload,
+    pushToGoogleDrive: triggerUpload,
     backupToDrive: triggerUpload,
+    getBackupList,
+    restoreFromSnapshot,
     restoreFromDrive: triggerRestore,
   };
 }

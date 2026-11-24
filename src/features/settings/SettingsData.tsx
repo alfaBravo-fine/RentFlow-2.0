@@ -1,4 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-dialog';
 import { usePack, usePackStore } from '../../countries/usePack';
 import { Card, CardHeader, CardTitle, CardDescription } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -15,6 +17,8 @@ import {
   Lock,
   Trash2,
   RotateCcw,
+  Folder,
+  CheckCircle2,
 } from '../../components/icons';
 import { useToast } from '../../components/toast/ToastContext';
 import { useDriveSync } from '../../hooks/useDriveSync';
@@ -23,7 +27,6 @@ import { databaseService } from '../../db/DatabaseService';
 import { Property, Tenant } from '../../db/schema';
 import { generateUUID } from '../../lib/uuid';
 import {
-  isTauri,
   tauriBackupDatabaseFile,
   tauriDbImportAll,
   tauriRestartApp,
@@ -34,23 +37,36 @@ import { useUIStore } from '../../stores/uiStore';
 import { useAppSettingsStore } from '../../stores/appSettingsStore';
 import { useAuthStore } from '../../stores/authStore';
 import { useThemeStore } from '../../stores/themeStore';
+import { DATA_PATH_STORAGE_KEY } from '../../components/SetupWizard';
+import { RestoreModal } from '../../components/RestoreModal';
+import { clearCloudOnboardingFlags } from '../../components/WelcomeRestoreScreen';
 
 export const SettingsData: React.FC = () => {
   const pack = usePack();
   const { showToast } = useToast();
-  const { syncState, syncNow, restoreFromDrive, isRestoring, lastSyncedAt } = useDriveSync();
+  const appMode = useAuthStore((s) => s.appMode);
+  const { syncState, syncNow, isRestoring, lastSyncedAt } = useDriveSync();
 
-  const [appDataPath, setAppDataPath] = useState<string>('Loading app data directory...');
+  const [appDataPath, setAppDataPath] = useState<string>(
+    () => localStorage.getItem(DATA_PATH_STORAGE_KEY) || 'Loading data location...'
+  );
+  const [pendingNewDataPath, setPendingNewDataPath] = useState<string | null>(null);
+  const [isMigrateConfirmOpen, setIsMigrateConfirmOpen] = useState(false);
+  const [isMigratingDatabase, setIsMigratingDatabase] = useState(false);
+  const [migratedRestartRequired, setMigratedRestartRequired] = useState(false);
   const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    databaseService
-      .getAppDataPath()
-      .then((path) => setAppDataPath(path))
+    invoke<string>('get_data_path')
+      .then((path) => {
+        if (path) {
+          setAppDataPath(path);
+          localStorage.setItem(DATA_PATH_STORAGE_KEY, path);
+        }
+      })
       .catch(() => {
-        setAppDataPath(
-          isTauri() ? 'AppData/Roaming/RentFlow' : 'Browser IndexedDB / Encrypted Local Storage'
-        );
+        const stored = localStorage.getItem(DATA_PATH_STORAGE_KEY);
+        if (stored) setAppDataPath(stored);
       });
 
     return () => {
@@ -70,7 +86,7 @@ export const SettingsData: React.FC = () => {
   const [backupDestinationPath, setBackupDestinationPath] = useState('');
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [isForceSyncing, setIsForceSyncing] = useState(false);
-  const [isForceRestoring, setIsForceRestoring] = useState(false);
+  const [isRestoreModalOpen, setIsRestoreModalOpen] = useState(false);
   const [csvImportType, setCsvImportType] = useState<'properties' | 'tenants'>('properties');
   const [isImportingCsv, setIsImportingCsv] = useState(false);
   const [isExportingExcel, setIsExportingExcel] = useState(false);
@@ -97,6 +113,59 @@ export const SettingsData: React.FC = () => {
     setExportDestination(val);
     void databaseService.saveSetting('exportDestination', val);
     showToast({ type: 'success', message: 'Export destination path updated successfully.' });
+  };
+
+  const handlePickDataLocation = async () => {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        defaultPath: appDataPath || undefined,
+        title: 'Choose New RentFlow Data Location',
+      });
+
+      if (typeof selected === 'string' && selected.trim()) {
+        const nextPath = selected.trim();
+        if (nextPath === appDataPath) {
+          showToast({ type: 'info', message: 'That folder is already your active data location.' });
+          return;
+        }
+        setPendingNewDataPath(nextPath);
+        setIsMigrateConfirmOpen(true);
+      }
+    } catch (err: unknown) {
+      const msg =
+        typeof err === 'string'
+          ? err
+          : (err as { message?: string })?.message || 'Failed to open folder picker.';
+      showToast({ type: 'error', message: msg });
+    }
+  };
+
+  const handleConfirmMigrateDatabase = async () => {
+    if (!pendingNewDataPath) return;
+    setIsMigratingDatabase(true);
+    try {
+      const migratedPath = await invoke<string>('migrate_database', { newPath: pendingNewDataPath });
+      const finalPath = migratedPath || pendingNewDataPath;
+      localStorage.setItem(DATA_PATH_STORAGE_KEY, finalPath);
+      setAppDataPath(finalPath);
+      setMigratedRestartRequired(true);
+      setIsMigrateConfirmOpen(false);
+      setPendingNewDataPath(null);
+      showToast({
+        type: 'success',
+        message: 'Database copied to the new location. Click Restart App to apply.',
+      });
+    } catch (err: unknown) {
+      const msg =
+        typeof err === 'string'
+          ? err
+          : (err as { message?: string })?.message || 'Failed to migrate database to new folder.';
+      showToast({ type: 'error', message: msg });
+    } finally {
+      setIsMigratingDatabase(false);
+    }
   };
 
   const handleToggleAutoSync = () => {
@@ -405,11 +474,7 @@ export const SettingsData: React.FC = () => {
   };
 
   const handleOpenBackupModal = () => {
-    if (!isTauri()) {
-      handleExportBackup();
-    } else {
-      setIsBackupModalOpen(true);
-    }
+    setIsBackupModalOpen(true);
   };
 
   const handleBackupDatabaseSubmit = async (e: React.FormEvent) => {
@@ -448,22 +513,22 @@ export const SettingsData: React.FC = () => {
       useUIStore.getState().setUILayout('sidebar');
       useThemeStore.getState().setTheme({ mode: 'light', colorPalette: 'classic' });
 
-      if (isTauri()) {
-        await tauriDbImportAll({});
-      }
+      await tauriDbImportAll({});
 
-      // 2. Overwrite the Google Drive backup with the empty database so ghost records cannot re-hydrate
-      const { user, accessToken } = useAuthStore.getState();
-      if (user?.sub && (isTauri() || accessToken)) {
+      // 2. Overwrite the Google Drive backup with the empty database so old records cannot re-hydrate (Cloud mode)
+      const { user, appMode: activeMode } = useAuthStore.getState();
+      if (activeMode === 'cloud' && user?.sub) {
         try {
-          await backupToDrive(accessToken, user.sub);
+          await backupToDrive(null, user.sub);
         } catch (driveErr) {
           console.warn('[Factory Reset] Could not overwrite Google Drive backup:', driveErr);
         }
       }
 
-      // 3. Clear remaining local persistence & OAuth tokens
+      // 3. Clear remaining local persistence, onboarding flags, mode choice & OAuth tokens
+      clearCloudOnboardingFlags();
       await databaseService.wipeAllLocalData();
+      useAuthStore.getState().setAppMode(null);
       await useAuthStore.getState().signOut();
 
       setIsFactoryResetOpen(false);
@@ -492,7 +557,9 @@ export const SettingsData: React.FC = () => {
   const handleWipeAllLocalData = async () => {
     setIsWipingData(true);
     try {
+      clearCloudOnboardingFlags();
       await databaseService.wipeAllLocalData();
+      useAuthStore.getState().setAppMode(null);
       await useAuthStore.getState().signOut();
       setIsWipeDataConfirmOpen(false);
       showToast({
@@ -515,6 +582,65 @@ export const SettingsData: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {/* Data Location Section */}
+      <Card className="space-y-4">
+        <CardHeader className="mb-2">
+          <div>
+            <div className="flex items-center gap-2">
+              <Database className="w-4 h-4 text-[var(--accent)]" />
+              <CardTitle>Data Location</CardTitle>
+            </div>
+            <CardDescription>
+              Directory where your local SQLite database (rentflow.db) and exported files are stored.
+            </CardDescription>
+          </div>
+        </CardHeader>
+
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 pt-1">
+          <div className="flex-1 min-w-0">
+            <Input
+              value={appDataPath}
+              readOnly
+              aria-label="Current Data Location"
+              className="font-mono text-xs bg-[var(--bg-surface-sunken)] cursor-default select-all"
+            />
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void handlePickDataLocation()}
+            className="w-full sm:w-auto h-10 px-4 gap-2 shrink-0 cursor-pointer"
+          >
+            <Folder className="w-4 h-4 text-[var(--accent)]" />
+            <span>Change Location</span>
+          </Button>
+        </div>
+
+        {migratedRestartRequired && (
+          <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/25 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-2.5 text-xs text-emerald-800 dark:text-emerald-200">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold">Database copied to the new location.</p>
+                <p className="text-[11px] opacity-90 mt-0.5">
+                  Restart RentFlow now to start reading and writing from <span className="font-mono">{appDataPath}</span>.
+                </p>
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              onClick={() => void tauriRestartApp()}
+              className="shrink-0 gap-1.5 cursor-pointer"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Restart App</span>
+            </Button>
+          </div>
+        )}
+      </Card>
+
       {/* Export Destination Settings */}
       <Card className="space-y-4">
         <CardHeader className="mb-2">
@@ -538,18 +664,28 @@ export const SettingsData: React.FC = () => {
             />
           </div>
           <Button
+            type="button"
             variant="outline"
             onClick={async () => {
-              if (isTauri()) {
-                showToast({ type: 'info', message: 'Tauri folder picker dialog opened.' });
-              } else {
-                const customPath = prompt('Enter export destination folder path:', exportDestination);
-                if (customPath) {
-                  handleSaveExportDestination(customPath);
+              try {
+                const picked = await open({
+                  directory: true,
+                  multiple: false,
+                  defaultPath: exportDestination || appDataPath || undefined,
+                  title: 'Choose Export Destination Folder',
+                });
+                if (typeof picked === 'string' && picked.trim()) {
+                  handleSaveExportDestination(picked.trim());
                 }
+              } catch (err: unknown) {
+                const msg =
+                  typeof err === 'string'
+                    ? err
+                    : (err as { message?: string })?.message || 'Could not open folder picker.';
+                showToast({ type: 'error', message: msg });
               }
             }}
-            className="w-full sm:w-auto h-10 px-4 shrink-0"
+            className="w-full sm:w-auto h-10 px-4 shrink-0 cursor-pointer"
           >
             Browse Folder
           </Button>
@@ -693,121 +829,96 @@ export const SettingsData: React.FC = () => {
           <div>
             <div className="flex items-center gap-2">
               <ShieldCheck className="w-4 h-4 text-emerald-600" />
-              <CardTitle>Zero-Knowledge Cloud Backup (Google Drive)</CardTitle>
+              <CardTitle>Local Backups &amp; Snapshots</CardTitle>
             </div>
             <CardDescription>
-              Client-side AES-256-GCM + Argon2id encryption before uploading to App_RentFlow_Backups.
+              {appMode === 'cloud'
+                ? "Client-side AES-256-GCM encryption uploaded as versioned snapshots to your 'RentFlow Backups' Google Drive folder."
+                : 'Create local SQLite backups or export portable JSON snapshots. Link Google Drive in General Settings for automated cloud sync.'}
             </CardDescription>
           </div>
         </CardHeader>
 
-        {/* Auto Sync Toggle */}
-        <div className="p-4 rounded-xl bg-[var(--bg-surface-sunken)] border border-[var(--border-subtle)] flex items-center justify-between gap-4">
-          <div>
-            <div className="text-xs font-semibold text-[var(--text-primary)]">
-              Automatic Background Synchronization
+        {/* Auto Sync Toggle (Cloud Mode Only) */}
+        {appMode === 'cloud' && (
+          <div className="p-4 rounded-xl bg-[var(--bg-surface-sunken)] border border-[var(--border-subtle)] flex items-center justify-between gap-4">
+            <div>
+              <div className="text-xs font-semibold text-[var(--text-primary)]">
+                Automatic Background Synchronization
+              </div>
+              <div className="text-[11px] text-[var(--text-secondary)] mt-0.5">
+                Automatically backs up database changes to Google Drive after local modifications.
+              </div>
             </div>
-            <div className="text-[11px] text-[var(--text-secondary)] mt-0.5">
-              Automatically backs up database changes to Google Drive after local modifications.
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={handleToggleAutoSync}
-            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-ring ${
-              autoSyncEnabled ? 'bg-emerald-600' : 'bg-[var(--border-strong)]'
-            }`}
-            role="switch"
-            aria-checked={autoSyncEnabled}
-            aria-label="Automatic Background Synchronization"
-          >
-            <span
-              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
-                autoSyncEnabled ? 'translate-x-5' : 'translate-x-0'
+            <button
+              type="button"
+              onClick={handleToggleAutoSync}
+              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-ring ${
+                autoSyncEnabled ? 'bg-emerald-600' : 'bg-[var(--border-strong)]'
               }`}
-            />
-          </button>
-        </div>
+              role="switch"
+              aria-checked={autoSyncEnabled}
+              aria-label="Automatic Background Synchronization"
+            >
+              <span
+                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                  autoSyncEnabled ? 'translate-x-5' : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </div>
+        )}
 
         <div className="flex flex-wrap items-center gap-2.5 pt-1">
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={async () => {
-              setIsForceSyncing(true);
-              try {
-                showToast({ type: 'info', message: 'Executing Google Drive sync...' });
-                await syncNow();
-                showToast({
-                  type: 'success',
-                  message: 'Sync Now complete! Database backed up to Google Drive.',
-                });
-              } catch (err: unknown) {
-                const msg =
-                  typeof err === 'string'
-                    ? err
-                    : (err as { message?: string })?.message || 'Drive sync failed';
-                showToast({ type: 'error', message: msg });
-              } finally {
-                setIsForceSyncing(false);
-              }
-            }}
-            disabled={isForceSyncing || isForceRestoring || isRestoring || syncState === 'syncing'}
-          >
-            <RefreshCw
-              className={`w-3.5 h-3.5 ${
-                isForceSyncing || syncState === 'syncing' ? 'animate-spin' : ''
-              }`}
-            />
-            <span>{isForceSyncing || syncState === 'syncing' ? 'Syncing...' : 'Sync Now'}</span>
-          </Button>
+          {appMode === 'cloud' && (
+            <>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={async () => {
+                  setIsForceSyncing(true);
+                  try {
+                    showToast({ type: 'info', message: 'Executing Google Drive sync...' });
+                    await syncNow();
+                    showToast({
+                      type: 'success',
+                      message: 'Sync complete! Database backed up to Google Drive.',
+                    });
+                  } catch (err: unknown) {
+                    const msg =
+                      typeof err === 'string'
+                        ? err
+                        : (err as { message?: string })?.message || 'Drive sync failed';
+                    showToast({ type: 'error', message: msg });
+                  } finally {
+                    setIsForceSyncing(false);
+                  }
+                }}
+                disabled={isForceSyncing || isRestoring || syncState === 'syncing'}
+              >
+                <RefreshCw
+                  className={`w-3.5 h-3.5 ${
+                    isForceSyncing || syncState === 'syncing' ? 'animate-spin' : ''
+                  }`}
+                />
+                <span>{isForceSyncing || syncState === 'syncing' ? 'Syncing...' : 'Sync Now'}</span>
+              </Button>
 
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={async () => {
-              const confirmed = window.confirm(
-                'Are you sure you want to restore from Google Drive? This will download RentFlow_FullBackup.enc, wipe current local data, and restore all records and settings.'
-              );
-              if (!confirmed) return;
-
-              setIsForceRestoring(true);
-              try {
-                showToast({
-                  type: 'info',
-                  message: 'Downloading RentFlow_FullBackup.enc and restoring database...',
-                });
-                const res = await restoreFromDrive();
-                if (res && res.restored) {
-                  showToast({
-                    type: 'success',
-                    message: `Restore complete! Restored ${res.totalRecords || 0} records.`,
-                  });
-                } else {
-                  showToast({
-                    type: 'info',
-                    message: res?.message || 'Restore completed (no backup found).',
-                  });
-                }
-              } catch (err: unknown) {
-                const msg =
-                  typeof err === 'string'
-                    ? err
-                    : (err as { message?: string })?.message || 'Drive restore failed';
-                showToast({ type: 'error', message: msg });
-              } finally {
-                setIsForceRestoring(false);
-              }
-            }}
-            disabled={isForceRestoring || isRestoring || isForceSyncing || syncState === 'syncing'}
-          >
-            <Download
-              className={`w-3.5 h-3.5 ${isForceRestoring || isRestoring ? 'animate-bounce' : ''}`}
-            />
-            <span>
-              {isForceRestoring || isRestoring ? 'Restoring...' : 'Restore from Drive'}
-            </span>
-          </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setIsRestoreModalOpen(true)}
+                disabled={isRestoring || isForceSyncing || syncState === 'syncing'}
+              >
+                <Download
+                  className={`w-3.5 h-3.5 ${isRestoring ? 'animate-bounce' : ''}`}
+                />
+                <span>
+                  {isRestoring ? 'Restoring...' : 'Restore from Drive'}
+                </span>
+              </Button>
+            </>
+          )}
 
           <Button variant="outline" size="sm" onClick={handleOpenBackupModal}>
             <Lock className="w-3.5 h-3.5 text-emerald-600" />
@@ -1066,6 +1177,59 @@ export const SettingsData: React.FC = () => {
           </div>
         </div>
       </Modal>
+
+      {/* Change Data Location Confirmation Modal */}
+      <Modal
+        isOpen={isMigrateConfirmOpen}
+        onClose={() => !isMigratingDatabase && setIsMigrateConfirmOpen(false)}
+        title="Change Data Location?"
+        maxWidth="md"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-[var(--text-secondary)] leading-relaxed">
+            Moving your data will require a restart. Your current database will be copied to the new location. Continue?
+          </p>
+          {pendingNewDataPath && (
+            <div className="p-3 rounded-xl bg-[var(--bg-surface-sunken)] border border-[var(--border-subtle)] text-xs space-y-1">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-subtle)] block">
+                New Destination Folder
+              </span>
+              <span className="font-mono text-[var(--text-primary)] break-all">{pendingNewDataPath}</span>
+            </div>
+          )}
+          <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-[var(--border-subtle)]">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setIsMigrateConfirmOpen(false);
+                setPendingNewDataPath(null);
+              }}
+              disabled={isMigratingDatabase}
+            >
+              No, Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              onClick={() => void handleConfirmMigrateDatabase()}
+              disabled={isMigratingDatabase}
+              className="gap-1.5"
+            >
+              <Database className={`w-3.5 h-3.5 ${isMigratingDatabase ? 'animate-spin' : ''}`} />
+              <span>{isMigratingDatabase ? 'Copying Database...' : 'Yes, Move Data'}</span>
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Versioned Snapshot Restore Modal */}
+      <RestoreModal
+        isOpen={isRestoreModalOpen}
+        onClose={() => setIsRestoreModalOpen(false)}
+      />
     </div>
   );
 };

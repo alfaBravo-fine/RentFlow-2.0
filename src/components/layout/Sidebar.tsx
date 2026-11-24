@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { Logo } from '../Logo';
 import { useAppSettingsStore } from '../../stores/appSettingsStore';
+import { useAuthStore } from '../../stores/authStore';
 import {
   Home,
   Building2,
@@ -34,6 +35,7 @@ export interface SidebarProps {
 export const Sidebar: React.FC<SidebarProps> = ({ isOpenMobile, onCloseMobile }) => {
   const isCollapsed = useAppSettingsStore((s) => s.sidebarCollapsed);
   const toggleCollapse = useAppSettingsStore((s) => s.toggleSidebarCollapsed);
+  const appMode = useAuthStore((s) => s.appMode);
 
   const navSections: Array<{
     category: string;
@@ -72,7 +74,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpenMobile, onCloseMobile })
         { to: '/calendar', label: 'Calendar', icon: Calendar },
         { to: '/area-calculator', label: 'Land Calculator', icon: Layers },
         { to: '/documents', label: 'Document Vault', icon: Folder },
-        { to: '/sync', label: 'Drive Sync', icon: RefreshCw },
+        ...(appMode === 'cloud'
+          ? [{ to: '/sync', label: 'Drive Sync & Backup', icon: RefreshCw }]
+          : []),
         { to: '/settings', label: 'Settings', icon: Settings, tourId: 'settings-tab' },
       ],
     },

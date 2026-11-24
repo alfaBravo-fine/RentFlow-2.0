@@ -169,8 +169,8 @@ export function useAppTour(autoStartOnFirstVisit = false): UseAppTourReturn {
       {
         element: '[data-tour="dashboard-kpis"]',
         popover: {
-          title: 'Welcome to RentFlow 🚀',
-          description: "This is your command center. Let's add your first property! (Click Next).",
+          title: 'Welcome to RentFlow',
+          description: 'This is your portfolio overview. Select Next to add your first property.',
           side: 'bottom',
           align: 'start',
           showButtons: ['next', 'close'],
@@ -202,7 +202,7 @@ export function useAppTour(autoStartOnFirstVisit = false): UseAppTourReturn {
         element: '[data-tour="btn-add-property"]',
         popover: {
           title: 'Create a Property',
-          description: 'Click here to open the form.',
+          description: 'Select Add Property to open the creation form.',
           side: 'bottom',
           align: 'end',
           showButtons: ['close'],
@@ -260,8 +260,8 @@ export function useAppTour(autoStartOnFirstVisit = false): UseAppTourReturn {
       {
         element: '[data-tour="sidebar-tenants"]',
         popover: {
-          title: 'Step 2: The Tenant',
-          description: "Now let's add a tenant. Click here.",
+          title: 'Step 2: Add a Tenant',
+          description: 'Select Tenants Directory to register your first tenant.',
           side: 'right',
           align: 'center',
           showButtons: ['close'],
@@ -339,8 +339,8 @@ export function useAppTour(autoStartOnFirstVisit = false): UseAppTourReturn {
       {
         element: '[data-tour="sidebar-leases"]',
         popover: {
-          title: 'Step 3: Link them',
-          description: 'A lease connects the property and tenant. Click here.',
+          title: 'Step 3: Create a Lease',
+          description: 'A lease connects a unit and tenant. Select Leases & Deposits to continue.',
           side: 'right',
           align: 'center',
           showButtons: ['close'],
@@ -418,9 +418,9 @@ export function useAppTour(autoStartOnFirstVisit = false): UseAppTourReturn {
       {
         element: '[data-tour="sidebar-invoicing"]',
         popover: {
-          title: 'The Money Engine',
+          title: 'Rent Roll & Invoicing',
           description:
-            'Click here. RentFlow automatically generated an invoice for your new lease!',
+            'Open Rent Roll & Invoicing to review the invoice automatically generated for your new lease.',
           side: 'right',
           align: 'center',
           showButtons: ['close'],
@@ -437,9 +437,9 @@ export function useAppTour(autoStartOnFirstVisit = false): UseAppTourReturn {
       // 15. Finish (Centered Modal)
       {
         popover: {
-          title: "You're a Pro! 🎉",
+          title: 'Setup Complete',
           description:
-            "You've just created a Property, Tenant, and Lease, and generated an invoice. You're ready to go!",
+            'You have created a property, registered a tenant, signed a lease, and generated your first invoice.',
           align: 'center',
           showButtons: ['next', 'close'],
           doneBtnText: 'Finish',
