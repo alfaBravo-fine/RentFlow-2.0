@@ -60,7 +60,9 @@ export const ExcelRibbon: React.FC = () => {
       const result = await exportAllDataToExcel(pack);
       showToast({
         type: 'success',
-        message: `Exported ${result.totalRecords} records to ${result.fileName}!`,
+        message: result.savedPath
+          ? `Exported ${result.totalRecords} records to ${result.savedPath}!`
+          : `Exported ${result.totalRecords} records to ${result.fileName}!`,
       });
     } catch (err: any) {
       showToast({ type: 'error', message: err.message || 'Export failed' });
@@ -79,7 +81,9 @@ export const ExcelRibbon: React.FC = () => {
       const result = await updateExistingExcel(file, pack);
       showToast({
         type: 'success',
-        message: `Updated Excel! Appended ${result.totalRecords} new record(s) across ${result.sheetCount} sheet(s).`,
+        message: result.savedPath
+          ? `Updated Excel (${result.totalRecords} new record(s)) saved to ${result.savedPath}.`
+          : `Updated Excel! Appended ${result.totalRecords} new record(s) across ${result.sheetCount} sheet(s).`,
       });
     } catch (err: any) {
       showToast({ type: 'error', message: err.message || 'Excel update failed' });

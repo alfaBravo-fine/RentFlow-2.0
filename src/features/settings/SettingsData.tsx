@@ -227,12 +227,14 @@ export const SettingsData: React.FC = () => {
     try {
       showToast({
         type: 'info',
-        message: 'Generating styled Excel workbook (.xlsx) with ExcelJS...',
+        message: 'Generating Excel workbook (.xlsx)...',
       });
-      const result = await exportAllDataToExcel(pack);
+      const result = await exportAllDataToExcel(pack, exportDestination);
       showToast({
         type: 'success',
-        message: `Successfully exported ${result.totalRecords} records across ${result.sheetCount} worksheets to "${result.fileName}"!`,
+        message: result.savedPath
+          ? `Exported ${result.totalRecords} records across ${result.sheetCount} worksheets to "${result.savedPath}".`
+          : `Successfully exported ${result.totalRecords} records across ${result.sheetCount} worksheets to "${result.fileName}"!`,
       });
     } catch (err: any) {
       showToast({
@@ -254,10 +256,12 @@ export const SettingsData: React.FC = () => {
         type: 'info',
         message: `Reading '${file.name}' and checking for existing records...`,
       });
-      const result = await updateExistingExcel(file, pack);
+      const result = await updateExistingExcel(file, pack, exportDestination);
       showToast({
         type: 'success',
-        message: `Excel Update Complete! Appended ${result.totalRecords} new record(s) across ${result.sheetCount} worksheets to "${result.fileName}".`,
+        message: result.savedPath
+          ? `Excel Update Complete! Appended ${result.totalRecords} new record(s) to "${result.savedPath}".`
+          : `Excel Update Complete! Appended ${result.totalRecords} new record(s) across ${result.sheetCount} worksheets to "${result.fileName}".`,
       });
     } catch (err: any) {
       showToast({
@@ -488,7 +492,7 @@ export const SettingsData: React.FC = () => {
       const savedPath = await tauriBackupDatabaseFile(backupDestinationPath.trim());
       showToast({
         type: 'success',
-        message: `Encrypted SQLite database backup saved to: ${savedPath}`,
+        message: `Encrypted database backup saved to: ${savedPath}`,
       });
       setIsBackupModalOpen(false);
       setBackupDestinationPath('');
@@ -591,7 +595,7 @@ export const SettingsData: React.FC = () => {
               <CardTitle>Data Location</CardTitle>
             </div>
             <CardDescription>
-              Directory where your local SQLite database (rentflow.db) and exported files are stored.
+              Folder where your local RentFlow database and exported files are stored.
             </CardDescription>
           </div>
         </CardHeader>
@@ -833,8 +837,8 @@ export const SettingsData: React.FC = () => {
             </div>
             <CardDescription>
               {appMode === 'cloud'
-                ? "Client-side AES-256-GCM encryption uploaded as versioned snapshots to your 'RentFlow Backups' Google Drive folder."
-                : 'Create local SQLite backups or export portable JSON snapshots. Link Google Drive in General Settings for automated cloud sync.'}
+                ? "Encrypted backups uploaded as versioned snapshots to your 'RentFlow Grouped Backups' Google Drive folder."
+                : 'Create local backups or export portable JSON snapshots. Link Google Drive in General Settings for automated cloud sync.'}
             </CardDescription>
           </div>
         </CardHeader>
@@ -907,7 +911,9 @@ export const SettingsData: React.FC = () => {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setIsRestoreModalOpen(true)}
+                onClick={() => {
+                  setIsRestoreModalOpen(true);
+                }}
                 disabled={isRestoring || isForceSyncing || syncState === 'syncing'}
               >
                 <Download
@@ -960,7 +966,7 @@ export const SettingsData: React.FC = () => {
               <CardTitle>Data Health Check &amp; Backup Status</CardTitle>
             </div>
             <CardDescription>
-              Verify local SQLite integrity and review recent cloud backup timestamps.
+              Verify local database integrity and review recent cloud backup timestamps.
             </CardDescription>
           </div>
           <span className="text-xs font-medium text-[var(--text-secondary)]">
@@ -1028,7 +1034,7 @@ export const SettingsData: React.FC = () => {
               <CardTitle>Database Maintenance &amp; Factory Reset</CardTitle>
             </div>
             <CardDescription>
-              Factory Reset wipes your local SQLite database, overwrites your cloud backup with an empty state, and restarts RentFlow.
+              Factory Reset erases your local database, resets your cloud backup to an empty state, and restarts RentFlow.
             </CardDescription>
           </div>
         </CardHeader>
@@ -1061,8 +1067,8 @@ export const SettingsData: React.FC = () => {
       <Modal
         isOpen={isBackupModalOpen}
         onClose={() => setIsBackupModalOpen(false)}
-        title="Backup Local SQLite Database"
-        description="Creates a point-in-time snapshot copy of your local SQLite database file (rentflow.db)."
+        title="Backup Local Database"
+        description="Creates a point-in-time snapshot copy of your local portfolio database file."
         maxWidth="md"
       >
         <form onSubmit={handleBackupDatabaseSubmit} className="space-y-4">
@@ -1102,13 +1108,13 @@ export const SettingsData: React.FC = () => {
         isOpen={isWipeDataConfirmOpen}
         onClose={() => !isWipingData && setIsWipeDataConfirmOpen(false)}
         title="Wipe All Local Data?"
-        description="Permanently deletes all local SQLite records, app settings, and desktop session tokens."
+        description="Permanently deletes all local records, app settings, and saved sign-in credentials."
         maxWidth="md"
       >
         <div className="space-y-4">
           <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-700 dark:text-rose-300 leading-relaxed">
             This will permanently erase all properties, units, tenants, leases, invoices, payments, expenses,
-            maintenance tickets, documents, and cached OAuth credentials from this device.
+            maintenance tickets, documents, and cached credentials from this device.
           </div>
 
           <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-[var(--border-subtle)]">
@@ -1140,14 +1146,14 @@ export const SettingsData: React.FC = () => {
         isOpen={isFactoryResetOpen}
         onClose={() => !isFactoryResetting && setIsFactoryResetOpen(false)}
         title="Confirm Factory Reset"
-        description="This nuclear reset erases both local SQLite data and your remote Google Drive backup."
+        description="This permanently erases both your local data and your remote Google Drive backup."
         maxWidth="md"
       >
         <div className="space-y-4">
           <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/25 text-xs text-rose-700 dark:text-rose-300 leading-relaxed space-y-2">
             <p className="font-semibold">This action cannot be undone and will:</p>
             <ul className="list-disc pl-4 space-y-1">
-              <li>Wipe the local SQLite database completely across all tables.</li>
+              <li>Erase your local portfolio database completely across all records.</li>
               <li>Overwrite your Google Drive backup with an empty database so old data never returns.</li>
               <li>Clear your session credentials and restart RentFlow cleanly.</li>
             </ul>

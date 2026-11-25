@@ -217,7 +217,7 @@ export const SettingsGeneral: React.FC = () => {
               {isAuthenticating ? (
                 <>
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>Linking Google...</span>
+                  <span>Opening Browser...</span>
                 </>
               ) : (
                 <>
@@ -483,8 +483,8 @@ export const SettingsGeneral: React.FC = () => {
       >
         <div className="space-y-4">
           <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
-            Your Google account is now linked. Would you like to upload your existing local SQLite database as your
-            first encrypted snapshot in your <code className="font-mono">RentFlow Backups</code> folder?
+            Your Google account is now linked. Would you like to upload your existing local portfolio data as your
+            first encrypted snapshot in your <code className="font-mono">RentFlow Grouped Backups</code> folder?
           </p>
           <div className="flex justify-end gap-2.5 pt-3 border-t border-[var(--border-subtle)]">
             <Button

@@ -1,6 +1,10 @@
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
+import { mkdir, writeFile } from '@tauri-apps/plugin-fs';
+import { join } from '@tauri-apps/api/path';
 import { db } from '../db/client';
+import { useAppSettingsStore } from '../stores/appSettingsStore';
+import { tauriGetDataPath } from './tauri/bridge';
 import {
   Property,
   Unit,
@@ -23,9 +27,41 @@ export interface ColumnDef {
 
 export interface ExportResult {
   fileName: string;
+  savedPath?: string;
   totalRecords: number;
   sheetCount: number;
   workbook?: ExcelJS.Workbook;
+}
+
+async function persistWorkbookBuffer(
+  buffer: ArrayBuffer | Uint8Array,
+  fileName: string,
+  customExportDir?: string
+): Promise<string | undefined> {
+  const isTauriDesktop =
+    typeof window !== 'undefined' && Boolean((window as any).__TAURI_INTERNALS__);
+
+  if (isTauriDesktop) {
+    let targetDir = (customExportDir || useAppSettingsStore.getState().exportDestination || '').trim();
+    if (!targetDir) {
+      targetDir = await tauriGetDataPath().catch(() => '');
+    }
+    if (targetDir) {
+      await mkdir(targetDir, { recursive: true });
+      const fullPath = await join(targetDir, fileName);
+      const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+      await writeFile(fullPath, bytes);
+      return fullPath;
+    }
+  }
+
+  if (typeof window !== 'undefined') {
+    const blob = new Blob([buffer as BlobPart], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    saveAs(blob, fileName);
+  }
+  return undefined;
 }
 
 /**
@@ -279,7 +315,10 @@ export function getExportData(pack?: CountryPack) {
  * Queries all 9 database tables (Properties, Units, Tenants, Leases, Invoices, Payments, Expenses, Maintenance, Vendors)
  * and applies merged title headers (#1F4E78), light gray column headers (#D9E1F2), thin cell borders, and column auto-width.
  */
-export async function exportToExcel(pack?: CountryPack): Promise<ExportResult> {
+export async function exportToExcel(
+  pack?: CountryPack,
+  customExportDir?: string
+): Promise<ExportResult> {
   const currencySymbol = pack?.currency?.symbol || 'Rs.';
   const currencyNumFmt = `"${currencySymbol} "#,##0.00`;
 
@@ -371,20 +410,14 @@ export async function exportToExcel(pack?: CountryPack): Promise<ExportResult> {
     });
   });
 
-  // Generate Excel buffer and trigger real file download via FileSaver.saveAs
   const dateStr = new Date().toISOString().split('T')[0];
   const fileName = `RentFlow_Export_${dateStr}.xlsx`;
   const buffer = await workbook.xlsx.writeBuffer();
-
-  if (typeof window !== 'undefined') {
-    const blob = new Blob([buffer], {
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    });
-    saveAs(blob, fileName);
-  }
+  const savedPath = await persistWorkbookBuffer(buffer, fileName, customExportDir);
 
   return {
     fileName,
+    savedPath,
     totalRecords: totalRecordsCount,
     sheetCount: 9,
     workbook,
@@ -399,7 +432,8 @@ export async function exportToExcel(pack?: CountryPack): Promise<ExportResult> {
  */
 export async function updateExistingExcel(
   fileOrBuffer: File | ArrayBuffer | Blob,
-  pack?: CountryPack
+  pack?: CountryPack,
+  customExportDir?: string
 ): Promise<ExportResult> {
   const currencySymbol = pack?.currency?.symbol || 'Rs.';
   const currencyNumFmt = `"${currencySymbol} "#,##0.00`;
@@ -581,23 +615,17 @@ export async function updateExistingExcel(
     });
   });
 
-  // Save and download file
   const dateStr = new Date().toISOString().split('T')[0];
   const outputFileName = inputFileName.endsWith('.xlsx')
     ? inputFileName.replace(/\.xlsx$/i, `_Updated_${dateStr}.xlsx`)
     : `RentFlow_Master_Updated_${dateStr}.xlsx`;
 
   const buffer = await workbook.xlsx.writeBuffer();
-
-  if (typeof window !== 'undefined') {
-    const blob = new Blob([buffer], {
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    });
-    saveAs(blob, outputFileName);
-  }
+  const savedPath = await persistWorkbookBuffer(buffer, outputFileName, customExportDir);
 
   return {
     fileName: outputFileName,
+    savedPath,
     totalRecords: totalAppendedRecords,
     sheetCount: workbook.worksheets.length,
     workbook,

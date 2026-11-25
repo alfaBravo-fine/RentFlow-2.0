@@ -113,37 +113,6 @@ export const BankReconciliationModal: React.FC<BankReconciliationModalProps> = (
     setTransactions(matched);
   };
 
-  const handleLoadSampleStatement = () => {
-    const sampleTenant = tenants[0];
-    const sampleTenant2 = tenants[1];
-    const sampleName1 = sampleTenant ? sampleTenant.name.toUpperCase() : 'SARAH JENKINS';
-    const sampleName2 = sampleTenant2 ? sampleTenant2.name.toUpperCase() : 'DAVID VANCE';
-
-    const raw = [
-      {
-        id: 'tx-1',
-        date: new Date().toISOString().slice(0, 10),
-        description: `ACH CREDIT - DIRECT DEP RENT ${sampleName1} WEB_PAY`,
-        amount: 1850.0,
-      },
-      {
-        id: 'tx-2',
-        date: new Date().toISOString().slice(0, 10),
-        description: `INCOMING WIRE TRANSFER - ${sampleName2} MONTHLY RENT`,
-        amount: 2200.0,
-      },
-      {
-        id: 'tx-3',
-        date: new Date().toISOString().slice(0, 10),
-        description: 'ONLINE BANKING TRANSFER - UNKNOWN REF #993182',
-        amount: 750.0,
-      },
-    ];
-
-    matchTransactions(raw);
-    showToast({ type: 'info', message: 'Loaded sample bank statement with auto-matching' });
-  };
-
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -247,7 +216,7 @@ export const BankReconciliationModal: React.FC<BankReconciliationModalProps> = (
       maxWidth="4xl"
     >
       <div className="space-y-6">
-        {/* Upload & Sample Statement Controls */}
+        {/* Upload Statement Controls */}
         <div className="p-4 rounded-xl bg-[var(--bg-base)] border border-[var(--border-subtle)] flex flex-wrap items-center justify-between gap-4">
           <div>
             <h4 className="text-xs font-bold text-[var(--text-primary)]">
@@ -259,11 +228,6 @@ export const BankReconciliationModal: React.FC<BankReconciliationModalProps> = (
           </div>
 
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={handleLoadSampleStatement} className="gap-1.5">
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>Load Sample Statement</span>
-            </Button>
-
             <label className="inline-flex cursor-pointer">
               <input
                 type="file"
@@ -296,7 +260,7 @@ export const BankReconciliationModal: React.FC<BankReconciliationModalProps> = (
           {transactions.length === 0 ? (
             <div className="p-12 text-center text-xs text-[var(--text-secondary)] bg-[var(--bg-surface)] rounded-xl border border-[var(--border-subtle)]">
               <FileSpreadsheet className="w-8 h-8 mx-auto mb-2 opacity-40 text-emerald-600" />
-              <span>Upload a bank statement CSV or click "Load Sample Statement" to review automated tenant matches.</span>
+              <span>Upload a bank statement CSV with Date, Description, and Deposit Amount columns to match tenant payments.</span>
             </div>
           ) : (
             <div className="rounded-xl border border-[var(--border-subtle)] overflow-x-auto">

@@ -12,6 +12,14 @@
     "updater:default",
     "autostart:default",
     "dialog:default",
-    "fs:default"
+    "fs:default",
+    "fs:allow-mkdir",
+    "fs:allow-exists",
+    "fs:allow-write-file",
+    "fs:allow-read-file",
+    {
+      "identifier": "fs:scope",
+      "allow": [{ "path": "**" }]
+    }
   ]
 }

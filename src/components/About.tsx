@@ -84,21 +84,20 @@ export const About: React.FC = () => {
             <h4 className="font-bold text-[var(--text-primary)]">1. Local-First Portfolio Storage</h4>
             <p>
               RentFlow stores your properties, units, tenant profiles, leases, invoices, payments, expenses,
-              and documents directly on your computer in a local SQLite database (<code className="font-mono">rentflow.db</code>).
+              and documents directly on your computer in a private local database.
             </p>
           </div>
           <div className="p-3.5 rounded-xl bg-[var(--bg-surface-sunken)] border border-[var(--border-subtle)] space-y-1.5">
-            <h4 className="font-bold text-[var(--text-primary)]">2. Native Google OAuth &amp; Token Isolation</h4>
+            <h4 className="font-bold text-[var(--text-primary)]">2. Secure Google Sign-In</h4>
             <p>
-              When Cloud Backup is enabled, authentication uses a PKCE OAuth 2.0 loopback flow handled directly
-              by the desktop application. Credentials remain stored locally inside your application data directory.
+              When Cloud Backup is enabled, authentication uses official Google sign-in handled securely by the desktop application. Credentials remain stored locally inside your application data folder.
             </p>
           </div>
           <div className="p-3.5 rounded-xl bg-[var(--bg-surface-sunken)] border border-[var(--border-subtle)] space-y-1.5">
             <h4 className="font-bold text-[var(--text-primary)]">3. Encrypted Google Drive Backups</h4>
             <p>
-              Database snapshots are encrypted on your machine using AES-256-GCM before being uploaded to your
-              visible <code className="font-mono">RentFlow Backups</code> Google Drive folder.
+              Portfolio snapshots are encrypted on your machine using AES-256 encryption before being uploaded to your
+              visible <code className="font-mono">RentFlow Grouped Backups</code> Google Drive folder.
             </p>
           </div>
           <div className="flex justify-end pt-3 border-t border-[var(--border-subtle)]">

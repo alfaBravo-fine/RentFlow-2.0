@@ -310,6 +310,10 @@ export async function tauriGoogleLogin(): Promise<AuthResponse> {
   return invokeTauri<AuthResponse>('google_login');
 }
 
+export async function tauriCancelGoogleLogin(): Promise<void> {
+  return invokeTauri<void>('cancel_google_login');
+}
+
 export async function tauriGoogleOAuth(): Promise<AuthResponse> {
   return invokeTauri<AuthResponse>('google_oauth');
 }
@@ -322,7 +326,7 @@ export async function tauriGoogleGetCurrentUser(): Promise<AuthResponse | null> 
   return invokeTauri<AuthResponse | null>('google_get_current_user');
 }
 
-// --- Google Drive Sync (Versioned Snapshots & Manifest in Rust Backend) ---
+// --- Google Drive Sync (Smart Grouped Sync: Change History + Full Backups in Rust Backend) ---
 
 export interface BackupManifestEntry {
   filename: string;
@@ -333,12 +337,46 @@ export interface BackupManifestEntry {
   record_count?: number;
 }
 
+export interface ChangeHistoryEntry {
+  filename: string;
+  entity: string;
+  table: string;
+  action: 'add' | 'edit' | 'delete' | string;
+  record_id: string;
+  summary?: string;
+  date: string;
+  size: string;
+  size_bytes?: number;
+  file_id?: string;
+}
+
+export interface GroupedBackupList {
+  full_backups: BackupManifestEntry[];
+  change_history: ChangeHistoryEntry[];
+  changes_since_full_backup: number;
+  last_full_backup_at?: string | null;
+}
+
+export interface ChangePayloadInput {
+  entity: string;
+  table: string;
+  action: 'add' | 'edit' | 'delete';
+  record_id: string;
+  summary?: string;
+  before?: Record<string, any> | null;
+  after?: Record<string, any> | null;
+  timestamp?: string;
+}
+
 export interface TauriSyncResult {
   success: boolean;
   synced_at: string;
   file_id?: string;
+  folder_id?: string;
   filename?: string;
   snapshot_count?: number;
+  full_backup_triggered?: boolean;
+  full_backup_filename?: string;
   message: string;
 }
 
@@ -352,6 +390,16 @@ export async function tauriDrivePushBackup(googleId?: string): Promise<TauriSync
   return invokeTauri<TauriSyncResult>('drive_push_backup', googleId ? { googleId } : undefined);
 }
 
+export async function tauriDrivePushChange(
+  change: ChangePayloadInput,
+  googleId?: string
+): Promise<TauriSyncResult> {
+  return invokeTauri<TauriSyncResult>('drive_push_change', {
+    change,
+    ...(googleId ? { googleId } : {}),
+  });
+}
+
 export async function tauriDrivePullBackup(googleId?: string): Promise<TauriPullResult> {
   return invokeTauri<TauriPullResult>('drive_pull_backup', googleId ? { googleId } : undefined);
 }
@@ -360,8 +408,16 @@ export async function tauriGetBackupList(): Promise<BackupManifestEntry[]> {
   return invokeTauri<BackupManifestEntry[]>('get_backup_list');
 }
 
+export async function tauriGetGroupedBackupList(): Promise<GroupedBackupList> {
+  return invokeTauri<GroupedBackupList>('get_grouped_backup_list');
+}
+
 export async function tauriRestoreFromSnapshot(filename: string): Promise<TauriPullResult> {
   return invokeTauri<TauriPullResult>('restore_from_snapshot', { filename });
+}
+
+export async function tauriRevertChangeSnapshot(filename: string): Promise<TauriPullResult> {
+  return invokeTauri<TauriPullResult>('revert_change_snapshot', { filename });
 }
 
 // --- Desktop Autostart (tauri-plugin-autostart) ---

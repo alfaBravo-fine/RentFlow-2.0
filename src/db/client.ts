@@ -94,9 +94,67 @@ function normalizeRecord<T extends Record<string, any>>(row: T): T {
   return normalized as T;
 }
 
+export type DBChangeAction = 'add' | 'edit' | 'delete';
+
+export interface DBEntityChangeEvent {
+  entity: string;
+  table: string;
+  action: DBChangeAction;
+  recordId: string;
+  summary: string;
+  before: Record<string, any> | null;
+  after: Record<string, any> | null;
+  timestamp: string;
+}
+
+const SKIP_CHANGE_HISTORY_TABLES = new Set([
+  'audit_log',
+  'sync_queue',
+  'device_registry',
+  'app_settings',
+]);
+
+const TABLE_TO_ENTITY_SLUG: Record<string, string> = {
+  properties: 'property',
+  units: 'unit',
+  tenants: 'tenant',
+  leases: 'lease',
+  invoices: 'invoice',
+  payments: 'payment',
+  credits: 'credit',
+  deposits: 'deposit',
+  deposit_deductions: 'deduction',
+  maintenance_requests: 'maintenance',
+  documents: 'document',
+  tenant_contact_logs: 'contact_log',
+  vendors: 'vendor',
+  expenses: 'expense',
+  rent_increases: 'rent_increase',
+  utility_bills: 'utility_bill',
+  owners: 'owner',
+  organizations: 'organization',
+  users: 'user',
+  workspaces: 'workspace',
+};
+
+function summarizeRecord(table: string, action: DBChangeAction, row: Record<string, any> | null): string {
+  const entityLabel = (TABLE_TO_ENTITY_SLUG[table] || table).replace(/_/g, ' ');
+  const name =
+    row?.name ||
+    row?.title ||
+    row?.category ||
+    row?.reason ||
+    row?.reference ||
+    row?.id ||
+    '';
+  const verb = action === 'add' ? 'Added' : action === 'delete' ? 'Deleted' : 'Updated';
+  return name ? `${verb} ${entityLabel}: ${String(name)}` : `${verb} ${entityLabel}`;
+}
+
 export class DBClient {
   private deviceId: string;
   private writeListeners: Array<() => void> = [];
+  private entityChangeListeners: Array<(event: DBEntityChangeEvent) => void> = [];
   private store: Map<string, any[]> = new Map();
   private hydrated = false;
 
@@ -194,6 +252,42 @@ export class DBClient {
     return () => {
       this.writeListeners = this.writeListeners.filter((l) => l !== listener);
     };
+  }
+
+  public onEntityChange(listener: (event: DBEntityChangeEvent) => void): () => void {
+    this.entityChangeListeners.push(listener);
+    return () => {
+      this.entityChangeListeners = this.entityChangeListeners.filter((l) => l !== listener);
+    };
+  }
+
+  private emitEntityChange(
+    table: string,
+    action: DBChangeAction,
+    recordId: string,
+    before: Record<string, any> | null,
+    after: Record<string, any> | null
+  ): void {
+    if (SKIP_CHANGE_HISTORY_TABLES.has(table)) return;
+    const entity = TABLE_TO_ENTITY_SLUG[table] || table;
+    const summary = summarizeRecord(table, action, after || before);
+    const event: DBEntityChangeEvent = {
+      entity,
+      table,
+      action,
+      recordId,
+      summary,
+      before: before ? { ...before } : null,
+      after: after ? { ...after } : null,
+      timestamp: new Date().toISOString(),
+    };
+    this.entityChangeListeners.forEach((listener) => {
+      try {
+        listener(event);
+      } catch (err) {
+        console.error('Error in db entity change listener:', err);
+      }
+    });
   }
 
   public notifyWrite() {
@@ -302,6 +396,7 @@ export class DBClient {
     ) as unknown as T;
 
     const existingIdx = rows.findIndex((r) => r.id === stamped.id);
+    const prevBefore = existingIdx >= 0 ? { ...(rows[existingIdx] as any) } : null;
     if (existingIdx >= 0) {
       rows[existingIdx] = stamped;
     } else {
@@ -332,6 +427,13 @@ export class DBClient {
     }
 
     this.notifyWrite();
+    this.emitEntityChange(
+      tableName,
+      existingIdx >= 0 ? 'edit' : 'add',
+      stamped.id,
+      prevBefore,
+      stamped as any
+    );
     return stamped;
   }
 
@@ -379,6 +481,7 @@ export class DBClient {
     }
 
     this.notifyWrite();
+    this.emitEntityChange(tableName, 'edit', id, before as any, updated as any);
     return updated;
   }
 
@@ -428,6 +531,7 @@ export class DBClient {
     }
 
     this.notifyWrite();
+    this.emitEntityChange(tableName, 'delete', id, before as any, updated as any);
     return true;
   }
 
@@ -586,6 +690,8 @@ export class DBClient {
       if (isTauri()) {
         await tauriDbDeletePropertyCascading(propertyId);
       }
+      const deletedProp = prevProps.find((p) => p.id === propertyId) || null;
+      this.emitEntityChange('properties', 'delete', propertyId, deletedProp as any, null);
       return true;
     } catch (err) {
       this.setMemoryTable('properties', prevProps);
@@ -696,6 +802,8 @@ export class DBClient {
       if (isTauri()) {
         await tauriDbDeleteUnitCascading(unitId);
       }
+      const deletedUnit = prevUnits.find((u) => u.id === unitId) || null;
+      this.emitEntityChange('units', 'delete', unitId, deletedUnit as any, null);
       return true;
     } catch (err) {
       this.setMemoryTable('units', prevUnits);
@@ -742,6 +850,8 @@ export class DBClient {
       if (isTauri()) {
         await tauriDbDeleteInvoiceCascading(invoiceId);
       }
+      const deletedInv = prevInvoices.find((inv) => inv.id === invoiceId) || null;
+      this.emitEntityChange('invoices', 'delete', invoiceId, deletedInv as any, null);
       return true;
     } catch (err) {
       this.setMemoryTable('invoices', prevInvoices);
@@ -860,6 +970,8 @@ export class DBClient {
       if (isTauri()) {
         await tauriDbDeleteTenantCascading(tenantId);
       }
+      const deletedTenant = prevTenants.find((t) => t.id === tenantId) || null;
+      this.emitEntityChange('tenants', 'delete', tenantId, deletedTenant as any, null);
       return true;
     } catch (err) {
       this.setMemoryTable('tenants', prevTenants);
@@ -1079,6 +1191,7 @@ export class DBClient {
       }
     }
 
+    this.emitEntityChange('payments', 'add', plan.payment.id, null, plan.payment as any);
     return { payment: plan.payment, allocatedInvoices: plan.allocatedInvoices, credit: plan.createdCredit };
   }
 
@@ -1182,6 +1295,7 @@ export class DBClient {
       }
     }
 
+    this.emitEntityChange('payments', 'delete', paymentId, targetPayment as any, null);
     return true;
   }
 
@@ -1211,6 +1325,7 @@ export class DBClient {
         }
       }
 
+      this.emitEntityChange('payments', 'add', plan.payment.id, null, plan.payment as any);
       return { payment: plan.payment, allocatedInvoices: plan.allocatedInvoices, credit: plan.createdCredit };
     } catch (err) {
       plan.rollback();
@@ -1355,6 +1470,7 @@ export class DBClient {
       }
     }
 
+    this.emitEntityChange('payments', 'add', plan.payment.id, null, plan.payment as any);
     return { payment: plan.payment, invoice: plan.updatedInv, credit: plan.createdCredit };
   }
 
@@ -1382,6 +1498,7 @@ export class DBClient {
         }
       }
 
+      this.emitEntityChange('payments', 'add', plan.payment.id, null, plan.payment as any);
       return { payment: plan.payment, invoice: plan.updatedInv, credit: plan.createdCredit };
     } catch (err) {
       plan.rollback();
@@ -1564,6 +1681,14 @@ export class DBClient {
         tauriDbInsertItem('deposit_deductions', rec).catch(() => {});
       }
     }
+
+    this.emitEntityChange(
+      'deposits',
+      isNewDepositRecord ? 'add' : 'edit',
+      updatedDeposit.id,
+      isNewDepositRecord ? null : (deposit as any),
+      updatedDeposit as any
+    );
 
     return {
       deposit: updatedDeposit,

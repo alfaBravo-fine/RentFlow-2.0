@@ -104,7 +104,7 @@ export const StorageSelector: React.FC<StorageSelectorProps> = ({
     e.preventDefault();
     const trimmed = selectedPath.trim();
     if (!trimmed) {
-      setErrorMessage('Please select a valid folder for your local SQLite database and exports.');
+      setErrorMessage('Please select a valid folder for your local database and exports.');
       return;
     }
 
@@ -156,11 +156,7 @@ export const StorageSelector: React.FC<StorageSelectorProps> = ({
               Select Local Storage Location
             </h1>
             <p className="text-xs sm:text-sm text-[var(--text-secondary)] max-w-md mx-auto leading-relaxed">
-              Choose the folder on your computer where RentFlow initializes your SQLite database (
-              <code className="font-mono text-[11px] bg-[var(--bg-surface)] px-1.5 py-0.5 rounded border border-[var(--border-subtle)]">
-                rentflow.db
-              </code>
-              ) and exported reports.
+              Choose the folder on your computer where RentFlow stores your portfolio database and exported reports.
             </p>
           </div>
         </div>
@@ -187,7 +183,7 @@ export const StorageSelector: React.FC<StorageSelectorProps> = ({
                       if (errorMessage) setErrorMessage(null);
                     }}
                     placeholder={
-                      isLoadingDefault ? 'Resolving default AppData folder...' : 'Select a folder path...'
+                      isLoadingDefault ? 'Finding default folder...' : 'Select a folder path...'
                     }
                     className="font-mono text-xs h-10"
                     disabled={isLoadingDefault || isSaving}
@@ -226,13 +222,13 @@ export const StorageSelector: React.FC<StorageSelectorProps> = ({
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                 <span>
                   {mode === 'cloud'
-                    ? 'Local SQLite + Google Drive Encryption Ready'
-                    : 'Strictly Offline Local SQLite Storage'}
+                    ? 'Local Database + Encrypted Google Drive Sync'
+                    : 'Private Offline Local Storage'}
                 </span>
               </div>
               <p className="text-[11px] leading-relaxed">
                 {mode === 'cloud'
-                  ? 'Data is saved locally first for instant speed and automatically encrypted before syncing to your RentFlow Backups folder.'
+                  ? 'Data is saved locally first for instant speed and automatically encrypted before syncing to your RentFlow Grouped Backups folder.'
                   : 'All records stay exclusively on your computer. You can link Google Drive later from Settings > General.'}
               </p>
             </div>

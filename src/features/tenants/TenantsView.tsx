@@ -673,7 +673,7 @@ export const TenantsView: React.FC = () => {
             data-tour="input-tenant-name"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. John Doe"
+            placeholder="e.g. Alex Morgan"
             required
           />
 
@@ -689,7 +689,7 @@ export const TenantsView: React.FC = () => {
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="e.g. john.doe@example.com"
+              placeholder="e.g. alex.morgan@example.com"
             />
           </div>
 
@@ -718,7 +718,7 @@ export const TenantsView: React.FC = () => {
               label="Emergency Contact Name"
               value={emergencyName}
               onChange={(e) => setEmergencyName(e.target.value)}
-              placeholder="e.g. Jane Doe (Spouse)"
+              placeholder="e.g. Jordan Morgan (Spouse)"
             />
             <Input
               label="Occupants Count"

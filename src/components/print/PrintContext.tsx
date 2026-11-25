@@ -91,13 +91,17 @@ export function printHtml(htmlString: string, onComplete?: () => void): void {
 
   activeLaunchTimer = window.setTimeout(() => {
     activeLaunchTimer = undefined;
-    try {
-      window.print();
-    } catch (err) {
-      console.error('[Print Engine] window.print() failed:', err);
-      cleanup();
-    }
-  }, 200);
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        try {
+          window.print();
+        } catch (err) {
+          console.error('[Print Engine] window.print() failed:', err);
+          cleanup();
+        }
+      });
+    });
+  }, 120);
 }
 
 export const PrintProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {

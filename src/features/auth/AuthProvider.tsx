@@ -17,7 +17,9 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
   const user = useAuthStore((s) => s.user);
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const isAuthenticating = useAuthStore((s) => s.isAuthenticating);
@@ -40,13 +42,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const loginWithGoogle = useCallback(async () => {
     setAuthenticating(true, null);
+    setStatusText('Opening Browser...');
+
+    // Yield a frame so the loading spinner updates before invoking Rust OAuth
+    await new Promise<void>((resolve) => {
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => resolve());
+      } else {
+        setTimeout(resolve, 0);
+      }
+    });
 
     try {
-      setStatusText('Waiting for Google account authorization...');
       const authResponse = await invoke<AuthResponse>('google_login');
 
       if (!authResponse || !authResponse.email) {
-        throw new Error('Google sign-in returned an incomplete user profile.');
+        throw new Error('Google sign-in returned an incomplete account profile.');
       }
 
       setGoogleSession({
@@ -56,16 +67,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         picture: authResponse.picture,
       });
     } catch (err: unknown) {
-      console.error('[Desktop Sign-in Error]:', err);
-      const errorMessage =
+      const rawMessage =
         typeof err === 'string'
           ? err
-          : (err as { message?: string })?.message || 'Google Sign-In failed.';
+          : (err as { message?: string })?.message || '';
+      const isCancelled =
+        !rawMessage ||
+        rawMessage.toLowerCase().includes('cancelled') ||
+        rawMessage.toLowerCase().includes('timed out') ||
+        rawMessage.toLowerCase().includes('denied');
 
-      setAuthenticating(false, errorMessage);
-      showToast({ type: 'error', message: errorMessage });
+      const displayMessage = isCancelled
+        ? 'Google login was cancelled. You can try again anytime.'
+        : rawMessage || 'Google login was cancelled. You can try again anytime.';
+
+      setAuthenticating(false, isCancelled ? null : displayMessage);
+      showToast({ type: 'error', message: displayMessage });
     } finally {
       setStatusText(null);
+      useAuthStore.setState({ isAuthenticating: false });
     }
   }, [setAuthenticating, setGoogleSession, showToast]);
 

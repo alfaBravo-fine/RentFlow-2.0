@@ -5,9 +5,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_store::StoreExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 
 // Native Desktop OAuth Credentials (strictly scoped to Rust backend)
 const CLIENT_ID: &str = "509114057579-hujt8mv20tj4vbul7f9ae4ua73j87eeq.apps.googleusercontent.com";
@@ -69,6 +71,7 @@ pub struct AuthState {
     pub drive_file_id: Mutex<Option<String>>,
     pub store_dir: Mutex<Option<PathBuf>>,
     pub sync_lock: tokio::sync::Mutex<()>,
+    pub oauth_cancel_tx: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
 
 impl Default for AuthState {
@@ -80,6 +83,7 @@ impl Default for AuthState {
             drive_file_id: Mutex::new(None),
             store_dir: Mutex::new(None),
             sync_lock: tokio::sync::Mutex::new(()),
+            oauth_cancel_tx: Mutex::new(None),
         }
     }
 }
@@ -302,44 +306,173 @@ fn generate_csrf_state() -> String {
     URL_SAFE_NO_PAD.encode(state_bytes)
 }
 
-/// Pure loopback callback parser — never touches UI threads or Tauri windows directly.
-fn google_callback(
-    url: String,
-    tx_arc: &Arc<Mutex<Option<tokio::sync::oneshot::Sender<Result<String, String>>>>>,
+const OAUTH_TIMEOUT_SECS: u64 = 120;
+const OAUTH_CANCELLED_MSG: &str = "Authentication cancelled or timed out";
+
+async fn send_oauth_http_response(
+    stream: &mut tokio::net::TcpStream,
+    status_line: &str,
+    body: &str,
 ) {
-    let result = match reqwest::Url::parse(&url) {
-        Ok(parsed_url) => {
-            let mut auth_code: Option<String> = None;
-            let mut oauth_error: Option<String> = None;
-            let mut oauth_error_desc: Option<String> = None;
+    let response = format!(
+        "HTTP/1.1 {}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n{}",
+        status_line,
+        body.len(),
+        body
+    );
+    let _ = stream.write_all(response.as_bytes()).await;
+    let _ = stream.flush().await;
+    let _ = stream.shutdown().await;
+}
 
-            for (k, v) in parsed_url.query_pairs() {
-                if k == "code" {
-                    auth_code = Some(v.to_string());
-                } else if k == "error" {
-                    oauth_error = Some(v.to_string());
-                } else if k == "error_description" {
-                    oauth_error_desc = Some(v.to_string());
+async fn await_oauth_callback(
+    listener: TcpListener,
+    port: u16,
+    expected_state: &str,
+    cancel_rx: &mut tokio::sync::oneshot::Receiver<()>,
+) -> Result<String, String> {
+    let loop_result = tokio::time::timeout(
+        std::time::Duration::from_secs(OAUTH_TIMEOUT_SECS),
+        async {
+            loop {
+                let (mut stream, _) = tokio::select! {
+                    _ = &mut *cancel_rx => {
+                        return Err(OAUTH_CANCELLED_MSG.to_string());
+                    }
+                    accept_res = listener.accept() => {
+                        match accept_res {
+                            Ok(pair) => pair,
+                            Err(_) => return Err(OAUTH_CANCELLED_MSG.to_string()),
+                        }
+                    }
+                };
+
+                let mut buf = [0u8; 8192];
+                let read_res = tokio::select! {
+                    _ = &mut *cancel_rx => {
+                        return Err(OAUTH_CANCELLED_MSG.to_string());
+                    }
+                    res = tokio::time::timeout(
+                        std::time::Duration::from_secs(10),
+                        stream.read(&mut buf),
+                    ) => res,
+                };
+
+                let bytes_read = match read_res {
+                    Ok(Ok(0)) | Ok(Err(_)) | Err(_) => {
+                        return Err(OAUTH_CANCELLED_MSG.to_string());
+                    }
+                    Ok(Ok(n)) => n,
+                };
+
+                let request_str = String::from_utf8_lossy(&buf[..bytes_read]);
+                let request_line = request_str.lines().next().unwrap_or("");
+                let mut parts = request_line.split_whitespace();
+                let _method = parts.next().unwrap_or("");
+                let target = parts.next().unwrap_or("/");
+
+                if target.starts_with("/favicon.ico") {
+                    send_oauth_http_response(&mut stream, "404 Not Found", "").await;
+                    continue;
                 }
-            }
 
-            if let Some(err) = oauth_error {
-                let detail = oauth_error_desc.unwrap_or(err);
-                Err(format!("Google sign-in denied: {}", detail))
-            } else if let Some(code) = auth_code {
-                Ok(code)
-            } else {
-                Err("No authorization code returned from Google callback.".to_string())
-            }
-        }
-        Err(e) => Err(format!("Failed to parse OAuth callback URL: {}", e)),
-    };
+                if !target.starts_with("/callback") {
+                    send_oauth_http_response(
+                        &mut stream,
+                        "404 Not Found",
+                        "<html><body><p>Not found.</p></body></html>",
+                    )
+                    .await;
+                    continue;
+                }
 
-    if let Ok(mut guard) = tx_arc.lock() {
-        if let Some(sender) = guard.take() {
-            let _ = sender.send(result);
+                let full_url = format!("http://127.0.0.1:{}{}", port, target);
+                let parsed_url = match reqwest::Url::parse(&full_url) {
+                    Ok(u) => u,
+                    Err(_) => {
+                        send_oauth_http_response(
+                            &mut stream,
+                            "400 Bad Request",
+                            "<html><body><p>Invalid callback request.</p></body></html>",
+                        )
+                        .await;
+                        return Err(OAUTH_CANCELLED_MSG.to_string());
+                    }
+                };
+
+                let mut auth_code: Option<String> = None;
+                let mut oauth_error: Option<String> = None;
+                let mut returned_state: Option<String> = None;
+
+                for (k, v) in parsed_url.query_pairs() {
+                    if k == "code" {
+                        auth_code = Some(v.to_string());
+                    } else if k == "error" {
+                        oauth_error = Some(v.to_string());
+                    } else if k == "state" {
+                        returned_state = Some(v.to_string());
+                    }
+                }
+
+                if oauth_error.is_some() {
+                    send_oauth_http_response(
+                        &mut stream,
+                        "200 OK",
+                        "<html><body style=\"font-family:system-ui,sans-serif;text-align:center;padding:48px;background:#f8fafc;color:#0f172a;\"><h2>Sign-In Cancelled</h2><p>You can close this browser tab and return to RentFlow.</p></body></html>",
+                    )
+                    .await;
+                    return Err(OAUTH_CANCELLED_MSG.to_string());
+                }
+
+                if returned_state.as_deref() != Some(expected_state) {
+                    send_oauth_http_response(
+                        &mut stream,
+                        "400 Bad Request",
+                        "<html><body style=\"font-family:system-ui,sans-serif;text-align:center;padding:48px;background:#f8fafc;color:#0f172a;\"><h2>Authentication Failed</h2><p>Security verification failed. Please close this tab and try again in RentFlow.</p></body></html>",
+                    )
+                    .await;
+                    return Err(OAUTH_CANCELLED_MSG.to_string());
+                }
+
+                if let Some(code) = auth_code {
+                    send_oauth_http_response(
+                        &mut stream,
+                        "200 OK",
+                        "<html><body style=\"font-family:system-ui,sans-serif;text-align:center;padding:48px;background:#f8fafc;color:#0f172a;\"><h2>RentFlow Connected</h2><p>Google authentication succeeded. You may close this browser tab and return to RentFlow.</p><script>window.close();</script></body></html>",
+                    )
+                    .await;
+                    return Ok(code);
+                }
+
+                send_oauth_http_response(
+                    &mut stream,
+                    "400 Bad Request",
+                    "<html><body style=\"font-family:system-ui,sans-serif;text-align:center;padding:48px;background:#f8fafc;color:#0f172a;\"><h2>Authentication Cancelled</h2><p>No authorization code was received. You can close this tab and return to RentFlow.</p></body></html>",
+                )
+                .await;
+                return Err(OAUTH_CANCELLED_MSG.to_string());
+            }
+        },
+    )
+    .await;
+
+    // Explicitly drop listener immediately so the bound loopback port is freed for future attempts
+    drop(listener);
+
+    match loop_result {
+        Ok(inner) => inner,
+        Err(_) => Err(OAUTH_CANCELLED_MSG.to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn cancel_google_login(state: State<'_, AuthState>) -> Result<(), String> {
+    if let Ok(mut guard) = state.oauth_cancel_tx.lock() {
+        if let Some(tx) = guard.take() {
+            let _ = tx.send(());
         }
     }
+    Ok(())
 }
 
 #[tauri::command]
@@ -353,31 +486,58 @@ pub async fn google_login(
         }
     }
 
+    // Cancel any leftover OAuth listener from an abandoned attempt so no port remains bound
+    if let Ok(mut cancel_guard) = state.oauth_cancel_tx.lock() {
+        if let Some(prev_tx) = cancel_guard.take() {
+            let _ = prev_tx.send(());
+        }
+    }
+
+    // Generate PKCE and CSRF state up front before starting the listener
+    let (code_verifier, code_challenge) = generate_pkce_pair();
+    let csrf_state = generate_csrf_state();
+
     let (port_tx, port_rx) = tokio::sync::oneshot::channel::<Result<u16, String>>();
     let (code_tx, code_rx) = tokio::sync::oneshot::channel::<Result<String, String>>();
-    let code_tx_arc = Arc::new(Mutex::new(Some(code_tx)));
+    let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
 
-    // 1. Spawn the OAuth loopback server in a separate Tokio task to avoid blocking Tauri's main event loop
-    let callback_tx_arc = Arc::clone(&code_tx_arc);
-    tokio::spawn(async move {
-        let start_result = tauri_plugin_oauth::start(move |url| {
-            google_callback(url, &callback_tx_arc);
-        })
-        .map_err(|e| format!("Failed to start local OAuth loopback server: {}", e));
+    if let Ok(mut cancel_guard) = state.oauth_cancel_tx.lock() {
+        *cancel_guard = Some(cancel_tx);
+    }
 
-        let _ = port_tx.send(start_result);
+    // 1. Start the async loopback server in a background Tokio task (non-blocking)
+    let expected_state = csrf_state.clone();
+    let server_handle = tokio::spawn(async move {
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(l) => l,
+            Err(e) => {
+                let _ = port_tx.send(Err(format!("Failed to start local OAuth loopback server: {}", e)));
+                return;
+            }
+        };
+
+        let port = match listener.local_addr() {
+            Ok(addr) => addr.port(),
+            Err(e) => {
+                drop(listener);
+                let _ = port_tx.send(Err(format!("Failed to inspect local OAuth port: {}", e)));
+                return;
+            }
+        };
+
+        let _ = port_tx.send(Ok(port));
+
+        let result = await_oauth_callback(listener, port, &expected_state, &mut cancel_rx).await;
+        let _ = code_tx.send(result);
     });
 
     let port = port_rx
         .await
-        .map_err(|_| "OAuth loopback server task terminated unexpectedly.".to_string())??;
+        .map_err(|_| OAUTH_CANCELLED_MSG.to_string())??;
 
     let redirect_uri = format!("http://127.0.0.1:{}/callback", port);
 
     // 2. Build Google OAuth authorization URL with PKCE
-    let (code_verifier, code_challenge) = generate_pkce_pair();
-    let csrf_state = generate_csrf_state();
-
     let authorize_url = reqwest::Url::parse_with_params(
         GOOGLE_AUTH_URL,
         &[
@@ -397,17 +557,45 @@ pub async fn google_login(
     )
     .map_err(|e| format!("Failed to build Google authorization URL: {}", e))?;
 
-    // 3. Open system default browser
-    open::that(authorize_url.as_str())
-        .map_err(|e| format!("Failed to open system browser for Google Login: {}", e))?;
+    // 3. Open system default browser immediately without blocking the async runtime or UI
+    let browser_url = authorize_url.to_string();
+    let browser_open_result =
+        tokio::task::spawn_blocking(move || open::that_detached(&browser_url))
+            .await
+            .map_err(|_| OAUTH_CANCELLED_MSG.to_string())?;
 
-    // 4. Await callback authorization code from the spawned oneshot channel (5 minute timeout)
-    let code_result = tokio::time::timeout(std::time::Duration::from_secs(300), code_rx)
-        .await
-        .map_err(|_| "Google OAuth login timed out waiting for browser authorization.".to_string())?
-        .map_err(|_| "Google OAuth loopback channel closed before receiving authorization code.".to_string())?;
+    if let Err(e) = browser_open_result {
+        if let Ok(mut cancel_guard) = state.oauth_cancel_tx.lock() {
+            if let Some(tx) = cancel_guard.take() {
+                let _ = tx.send(());
+            }
+        }
+        server_handle.abort();
+        return Err(format!("Failed to open system browser for Google Login: {}", e));
+    }
 
-    let auth_code = code_result?;
+    // 4. Await callback authorization code (2-minute timeout or connection drop / cancellation)
+    let code_result = tokio::time::timeout(
+        std::time::Duration::from_secs(OAUTH_TIMEOUT_SECS + 2),
+        code_rx,
+    )
+    .await;
+
+    if let Ok(mut cancel_guard) = state.oauth_cancel_tx.lock() {
+        cancel_guard.take();
+    }
+
+    let auth_code = match code_result {
+        Ok(Ok(Ok(code))) => code,
+        Ok(Ok(Err(err_msg))) => {
+            server_handle.abort();
+            return Err(err_msg);
+        }
+        Ok(Err(_)) | Err(_) => {
+            server_handle.abort();
+            return Err(OAUTH_CANCELLED_MSG.to_string());
+        }
+    };
 
     // 5. Exchange authorization code for tokens via reqwest POST including client_secret
     let http_client = reqwest::Client::new();

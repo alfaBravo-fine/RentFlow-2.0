@@ -165,7 +165,7 @@ export const Topbar: React.FC<TopbarProps> = ({ isDarkMode, onToggleTheme, onOpe
 
   return (
     <>
-      <header className="h-16 border-b border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 sm:px-8 flex items-center justify-between shrink-0 gap-3">
+      <header className="no-print relative z-50 h-16 border-b border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 sm:px-8 flex items-center justify-between shrink-0 gap-3">
         {/* Left: Mobile Toggle & Global Search Input */}
         <div className="flex items-center gap-2 sm:gap-3 flex-1 max-w-xl">
           {/* Mobile hamburger menu toggle & logo */}
@@ -222,7 +222,7 @@ export const Topbar: React.FC<TopbarProps> = ({ isDarkMode, onToggleTheme, onOpe
             </motion.button>
 
             {isQuickActionOpen && (
-              <div className="absolute right-0 mt-2 w-48 rounded-2xl bg-[var(--bg-surface)] border border-[var(--border-strong)] modal-shadow py-2 z-50 animate-in fade-in zoom-in-95 duration-150">
+              <div className="absolute right-0 mt-2 w-48 rounded-2xl bg-[var(--bg-popover,var(--bg-surface))] border border-[var(--border-strong)] modal-shadow py-2 z-[100] animate-in fade-in zoom-in-95 duration-150">
                 <button
                   onClick={() => {
                     setIsQuickActionOpen(false);
@@ -281,8 +281,8 @@ export const Topbar: React.FC<TopbarProps> = ({ isDarkMode, onToggleTheme, onOpe
             </button>
 
             {isNotificationsOpen && (
-              <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl bg-[var(--bg-surface)] border border-[var(--border-strong)] modal-shadow overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-150">
-                <div className="p-4 border-b border-[var(--border-subtle)] flex items-center justify-between bg-[var(--bg-base)]">
+              <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl bg-[var(--bg-popover,var(--bg-surface))] border border-[var(--border-strong)] modal-shadow overflow-hidden z-[100] animate-in fade-in zoom-in-95 duration-150">
+                <div className="p-4 border-b border-[var(--border-subtle)] flex items-center justify-between bg-[var(--bg-popover,var(--bg-base))]">
                   <div>
                     <h4 className="text-xs font-bold text-[var(--text-primary)] uppercase tracking-wider">
                       Portfolio Alerts

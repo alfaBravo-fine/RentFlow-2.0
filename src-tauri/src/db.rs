@@ -1990,6 +1990,110 @@ pub async fn record_deduction_transaction(
     }))
 }
 
+/// Reverts a single recorded entity mutation inside a strict SQLite transaction.
+/// - `add`: soft-deletes the added record (`deleted_at = now`) or removes it if log/settings table
+/// - `edit` / `delete`: restores the exact `before` record (`deleted_at = NULL`, `updated_at = now`)
+pub fn revert_single_change(
+    state: &DatabaseManager,
+    table: &str,
+    action: &str,
+    record_id: &str,
+    before: Option<&Value>,
+) -> Result<String, String> {
+    validate_table_name(table)?;
+
+    let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let now_ts = current_timestamp_ms();
+
+    let summary_msg: String;
+
+    match action {
+        "add" => {
+            if table == "app_settings" {
+                tx.execute("DELETE FROM app_settings WHERE key = ?", params![record_id])
+                    .map_err(|e| e.to_string())?;
+            } else if table == "audit_log" || table == "sync_queue" {
+                let sql = format!("DELETE FROM {} WHERE id = ?", table);
+                tx.execute(&sql, params![record_id])
+                    .map_err(|e| e.to_string())?;
+            } else {
+                let sql = format!(
+                    "UPDATE {} SET deleted_at = ?, updated_at = ? WHERE id = ?",
+                    table
+                );
+                tx.execute(&sql, params![now_ts, now_ts, record_id])
+                    .map_err(|e| e.to_string())?;
+            }
+            summary_msg = format!("Reverted addition in '{}' ({})", table, record_id);
+        }
+        "edit" | "delete" => {
+            let Some(before_val) = before else {
+                return Err(format!(
+                    "Change snapshot does not include a pre-change record to restore for '{}' ({}).",
+                    table, record_id
+                ));
+            };
+
+            let mut restored_obj = before_val
+                .as_object()
+                .ok_or("Snapshot pre-change record is not a valid JSON object.")?
+                .clone();
+
+            restored_obj.remove("deletedAt");
+            if table != "audit_log" && table != "sync_queue" && table != "app_settings" {
+                restored_obj.insert("deleted_at".to_string(), Value::Null);
+            }
+            restored_obj.insert("updated_at".to_string(), json!(now_ts));
+
+            insert_json_into_conn(&tx, table, &Value::Object(restored_obj))?;
+            summary_msg = format!(
+                "Reverted {} in '{}' ({})",
+                if action == "delete" { "deletion" } else { "edit" },
+                table,
+                record_id
+            );
+        }
+        other => {
+            return Err(format!("Unsupported change action '{}'", other));
+        }
+    }
+
+    // Keep unit occupancy synchronized whenever a lease is reverted
+    if table == "leases" {
+        let affected_unit: Option<String> = before
+            .and_then(|v| v.get("unit_id").and_then(|u| u.as_str()).map(|s| s.to_string()))
+            .or_else(|| {
+                tx.query_row(
+                    "SELECT unit_id FROM leases WHERE id = ? LIMIT 1",
+                    params![record_id],
+                    |row| row.get(0),
+                )
+                .ok()
+            });
+
+        if let Some(uid) = affected_unit {
+            let active_count: i64 = tx
+                .query_row(
+                    "SELECT COUNT(*) FROM leases WHERE unit_id = ? AND status = 'active' AND deleted_at IS NULL",
+                    params![uid],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+
+            let next_status = if active_count > 0 { "occupied" } else { "vacant" };
+            tx.execute(
+                "UPDATE units SET status = ?, updated_at = ? WHERE id = ? AND status != 'maintenance'",
+                params![next_status, now_ts, uid],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
+
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(summary_msg)
+}
+
 /// Wipes all SQLite tables and clears persisted OAuth token store data locally.
 #[tauri::command]
 pub async fn wipe_all_local_data(

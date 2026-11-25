@@ -14,6 +14,7 @@ import {
 } from './icons';
 import { AuthResponse } from '../lib/tauri/bridge';
 import { useAuthStore, UserProfile } from '../stores/authStore';
+import { useToast } from './toast/ToastContext';
 
 export interface ModeSelectorProps {
   onSelectLocal: () => void;
@@ -25,13 +26,33 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({
   onSelectCloud,
 }) => {
   const setGoogleSession = useAuthStore((s) => s.setGoogleSession);
-  const [isConnectingGoogle, setIsConnectingGoogle] = useState(false);
+  const { showToast } = useToast();
+  const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  const handleCancelLogin = async () => {
+    try {
+      await invoke('cancel_google_login');
+    } catch {
+      // Ignore invoke error if server already closed
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleCloudSelect = async () => {
-    if (isConnectingGoogle) return;
+    if (isLoading) return;
     setErrorMessage(null);
-    setIsConnectingGoogle(true);
+    setIsLoading(true);
+
+    // Yield one paint frame so the 'Opening Browser...' spinner renders immediately
+    await new Promise<void>((resolve) => {
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => resolve());
+      } else {
+        setTimeout(resolve, 0);
+      }
+    });
 
     try {
       const authResponse = await invoke<AuthResponse>('google_login');
@@ -46,17 +67,29 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({
         picture: authResponse.picture,
       };
 
+      setIsLoading(false);
       setGoogleSession(profile);
       onSelectCloud(profile);
     } catch (err: unknown) {
-      const message =
+      setIsLoading(false);
+      const rawMessage =
         typeof err === 'string'
           ? err
-          : (err as { message?: string })?.message ||
-            'Google sign-in could not be completed. Please try again or choose Offline & Private mode.';
-      setErrorMessage(message);
+          : (err as { message?: string })?.message || '';
+      const isCancelled =
+        !rawMessage ||
+        rawMessage.toLowerCase().includes('cancelled') ||
+        rawMessage.toLowerCase().includes('timed out') ||
+        rawMessage.toLowerCase().includes('denied');
+
+      const friendlyToast = 'Google login was cancelled. You can try again anytime.';
+      showToast({
+        type: 'error',
+        message: isCancelled ? friendlyToast : rawMessage || friendlyToast,
+      });
+      setErrorMessage(isCancelled ? friendlyToast : rawMessage || friendlyToast);
     } finally {
-      setIsConnectingGoogle(false);
+      setIsLoading(false);
     }
   };
 
@@ -120,7 +153,7 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({
               <ul className="space-y-2.5 pt-2 border-t border-[var(--border-subtle)] text-xs text-[var(--text-secondary)]">
                 <li className="flex items-center gap-2.5">
                   <Check className="w-3.5 h-3.5 text-[var(--text-primary)] shrink-0" />
-                  <span>Direct local SQLite database on your drive</span>
+                  <span>Private local database stored on your computer</span>
                 </li>
                 <li className="flex items-center gap-2.5">
                   <Check className="w-3.5 h-3.5 text-[var(--text-primary)] shrink-0" />
@@ -138,7 +171,7 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({
                 type="button"
                 variant="outline"
                 onClick={onSelectLocal}
-                disabled={isConnectingGoogle}
+                disabled={isLoading}
                 className="w-full h-11 justify-center gap-2 text-sm font-semibold rounded-xl cursor-pointer whitespace-nowrap"
               >
                 <span>Choose Offline &amp; Private</span>
@@ -171,7 +204,7 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({
               <ul className="space-y-2.5 pt-2 border-t border-[var(--border-subtle)] text-xs text-[var(--text-secondary)]">
                 <li className="flex items-center gap-2.5">
                   <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span>Encrypted snapshots in your RentFlow Backups folder</span>
+                  <span>Encrypted snapshots in your RentFlow Grouped Backups folder</span>
                 </li>
                 <li className="flex items-center gap-2.5">
                   <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
@@ -184,18 +217,18 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({
               </ul>
             </div>
 
-            <div className="pt-6 mt-6 border-t border-[var(--border-subtle)]">
+            <div className="pt-6 mt-6 border-t border-[var(--border-subtle)] space-y-2">
               <Button
                 type="button"
                 variant="primary"
                 onClick={() => void handleCloudSelect()}
-                disabled={isConnectingGoogle}
+                disabled={isLoading}
                 className="w-full h-11 justify-center gap-2 text-sm font-semibold rounded-xl cursor-pointer whitespace-nowrap"
               >
-                {isConnectingGoogle ? (
+                {isLoading ? (
                   <>
                     <RefreshCw className="w-4 h-4 animate-spin shrink-0" />
-                    <span>Connecting to Google...</span>
+                    <span>Opening Browser...</span>
                   </>
                 ) : (
                   <>
@@ -204,6 +237,16 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({
                   </>
                 )}
               </Button>
+
+              {isLoading && (
+                <button
+                  type="button"
+                  onClick={() => void handleCancelLogin()}
+                  className="w-full py-1.5 text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
+                >
+                  Cancel sign-in
+                </button>
+              )}
             </div>
           </div>
         </div>

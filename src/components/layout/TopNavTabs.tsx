@@ -4,6 +4,7 @@ import { motion } from 'motion/react';
 import { useTheme } from '../theme/ThemeProvider';
 import { useUIStore } from '../../stores/uiStore';
 import { useAuthStore } from '../../stores/authStore';
+import { useToast } from '../toast/ToastContext';
 import { CommandPalette } from './CommandPalette';
 import { QuickCopyPanel } from './QuickCopyPanel';
 import { Logo } from '../Logo';
@@ -70,7 +71,7 @@ export const TopNavTabs: React.FC = () => {
   ];
 
   return (
-    <header className="no-print bg-[var(--bg-surface)] border-b border-[var(--border-subtle)] shrink-0 select-none shadow-xs sticky top-0 z-40">
+    <header className="no-print bg-[var(--bg-surface)] border-b border-[var(--border-subtle)] shrink-0 select-none shadow-xs sticky top-0 z-50">
       {/* Top Bar: Brand, Global Search, Quick Actions & Utility Tools */}
       <div className="flex items-center justify-between px-4 sm:px-8 h-16 border-b border-[var(--border-subtle)] gap-4">
         {/* Brand Header */}
@@ -119,7 +120,7 @@ export const TopNavTabs: React.FC = () => {
             </motion.button>
 
             {isQuickActionOpen && (
-              <div className="absolute right-0 mt-2 w-48 rounded-2xl bg-[var(--bg-surface)] border border-[var(--border-strong)] modal-shadow py-2 z-50 animate-in fade-in zoom-in-95 duration-150">
+              <div className="absolute right-0 mt-2 w-48 rounded-2xl bg-[var(--bg-popover,var(--bg-surface))] border border-[var(--border-strong)] modal-shadow py-2 z-[100] animate-in fade-in zoom-in-95 duration-150">
                 <button
                   onClick={() => {
                     setIsQuickActionOpen(false);
@@ -197,11 +198,13 @@ export const TopNavTabs: React.FC = () => {
             </div>
           ) : user ? (
             <button
-              onClick={signOut}
+              onClick={() => {
+                void signOut();
+              }}
               className="w-9 h-9 rounded-xl bg-[var(--accent-subtle)] text-[var(--accent)] font-bold text-xs flex items-center justify-center hover:opacity-80 transition-opacity cursor-pointer shadow-2xs"
               title={`Sign out (${user.email})`}
             >
-              {user.email[0].toUpperCase()}
+              {(user.name?.[0] || user.email[0]).toUpperCase()}
             </button>
           ) : null}
         </div>

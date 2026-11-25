@@ -115,7 +115,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
   // --- TOP-TABS LAYOUT MODE ---
   if (uiLayout === 'top-tabs') {
     return (
-      <div className={`flex flex-col h-screen w-screen overflow-hidden ${shellBackgroundClass}`}>
+      <div className={`flex flex-col h-full w-full flex-1 min-h-0 overflow-hidden ${shellBackgroundClass}`}>
         <TopNavTabs />
         {renderUrgentBanner()}
         {renderPageContent()}
@@ -126,7 +126,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
 
   // --- SIDEBAR LAYOUT MODE (Default) ---
   return (
-    <div className={`flex h-screen w-screen overflow-hidden ${shellBackgroundClass}`}>
+    <div className={`flex h-full w-full flex-1 min-h-0 overflow-hidden ${shellBackgroundClass}`}>
       <Sidebar
         isOpenMobile={isMobileSidebarOpen}
         onCloseMobile={() => setIsMobileSidebarOpen(false)}

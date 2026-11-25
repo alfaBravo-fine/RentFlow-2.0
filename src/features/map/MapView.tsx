@@ -43,8 +43,17 @@ import {
 
 type MapLayerType = 'streets' | 'satellite' | 'terrain';
 
+function getMapTilerApiKey(): string {
+  const raw = import.meta.env.VITE_MAPTILER_API_KEY;
+  const trimmed = typeof raw === 'string' ? raw.trim() : '';
+  if (!trimmed || trimmed === 'YOUR_KEY_HERE' || trimmed === 'your_maptiler_api_key_here') {
+    return '';
+  }
+  return trimmed;
+}
+
 function getMapStyle(layer: MapLayerType): string | maplibregl.StyleSpecification {
-  const apiKey = import.meta.env.VITE_MAPTILER_API_KEY?.trim();
+  const apiKey = getMapTilerApiKey();
 
   if (apiKey) {
     switch (layer) {
@@ -58,11 +67,11 @@ function getMapStyle(layer: MapLayerType): string | maplibregl.StyleSpecificatio
     }
   }
 
-  // Fallback raster style if VITE_MAPTILER_API_KEY is not configured
+  // Silent OpenStreetMap fallback when MapTiler key is omitted
   return {
     version: 8,
     sources: {
-      'fallback-osm': {
+      'osm-tiles': {
         type: 'raster',
         tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
         tileSize: 256,
@@ -72,9 +81,9 @@ function getMapStyle(layer: MapLayerType): string | maplibregl.StyleSpecificatio
     },
     layers: [
       {
-        id: 'fallback-osm-layer',
+        id: 'osm-tiles-layer',
         type: 'raster',
-        source: 'fallback-osm',
+        source: 'osm-tiles',
         minzoom: 0,
         maxzoom: 22,
       },
@@ -282,15 +291,8 @@ export const MapView: React.FC = () => {
       zoom: initialZoom,
     });
 
-    if (!import.meta.env.VITE_MAPTILER_API_KEY?.trim()) {
-      showToast({
-        type: 'info',
-        message: 'VITE_MAPTILER_API_KEY is not set — using fallback OpenStreetMap tiles.',
-      });
-    }
-
-    map.on('error', (err) => {
-      console.warn('[MapView] MapLibre warning:', err?.error || err);
+    map.on('error', () => {
+      // Handled silently so missing tiles never surface technical warnings in the UI
     });
 
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
@@ -955,7 +957,7 @@ export const MapView: React.FC = () => {
       >
         <div className="space-y-4">
           <p className="text-sm text-[var(--text-secondary)]">
-            Are you sure you want to delete this property? It will be soft-deleted from both the GIS map and your property portfolio.
+            Are you sure you want to remove this property? It will be archived from both the map and your property portfolio.
           </p>
           <div className="flex justify-end gap-3 pt-3 border-t border-[var(--border-subtle)]">
             <Button variant="outline" onClick={() => setIsDeleteConfirmOpen(false)}>

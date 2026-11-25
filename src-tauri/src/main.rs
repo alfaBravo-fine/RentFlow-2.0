@@ -19,10 +19,13 @@ use db::{
     update_lease, update_maintenance_request, update_property, update_tenant, update_unit,
     update_vendor, wipe_all_local_data, DatabaseManager,
 };
-use drive_sync::{drive_pull_backup, drive_push_backup, get_backup_list, restore_from_snapshot};
+use drive_sync::{
+    drive_pull_backup, drive_push_backup, drive_push_change, get_backup_list,
+    get_grouped_backup_list, restore_from_snapshot, revert_change_snapshot,
+};
 use auth::{
-    google_get_current_user, google_login, google_oauth, google_oauth_logout, hydrate_auth_state,
-    AuthState,
+    cancel_google_login, google_get_current_user, google_login, google_oauth,
+    google_oauth_logout, hydrate_auth_state, AuthState,
 };
 use std::fs;
 use tauri::Manager;
@@ -158,14 +161,18 @@ fn main() {
             migrate_database,
             // Google OAuth Loopback Desktop Flow
             google_login,
+            cancel_google_login,
             google_oauth,
             google_oauth_logout,
             google_get_current_user,
-            // Google Drive Rust Sync (Versioned Snapshots & Manifest)
+            // Google Drive Rust Sync (Smart Grouped Sync: Change History + Full Backups)
             drive_push_backup,
+            drive_push_change,
             drive_pull_backup,
             get_backup_list,
+            get_grouped_backup_list,
             restore_from_snapshot,
+            revert_change_snapshot,
             // App Lifecycle
             restart_app,
         ])

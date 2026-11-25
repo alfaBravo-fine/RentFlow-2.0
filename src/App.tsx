@@ -14,6 +14,7 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { KeyboardShortcutsModal } from './components/layout/KeyboardShortcutsModal';
 import { PrintProvider } from './components/print/PrintContext';
 import { SplashScreen } from './components/common/SplashScreen';
+import { AppContextMenu } from './components/common/ContextMenu';
 import { DATA_PATH_STORAGE_KEY } from './components/SetupWizard';
 import { ModeSelector } from './components/ModeSelector';
 import { StorageSelector } from './components/StorageSelector';
@@ -25,6 +26,8 @@ import { databaseService } from './db/DatabaseService';
 import { getBackupList, isLocalDatabaseEmpty } from './lib/googleDriveService';
 import { BackupManifestEntry } from './lib/tauri/bridge';
 import { AppMode, useAuthStore, UserProfile } from './stores/authStore';
+
+const isDebugMode = false;
 
 const queryClient = new QueryClient();
 
@@ -135,6 +138,7 @@ function AuthenticatedContent() {
         cleanupLateFees = initAutomatedLateFeeSchedule();
 
         if (
+          !isDebugMode &&
           appMode === 'cloud' &&
           user?.sub &&
           isLocalDatabaseEmpty() &&
@@ -213,11 +217,11 @@ function AppShell({ configuredDataPath, onOnboardingComplete }: AppShellProps) {
   const { isAuthenticated, user } = useAuth();
   const appMode = useAuthStore((s) => s.appMode);
 
-  if (configuredDataPath === null || appMode === null) {
+  if (!isDebugMode && (configuredDataPath === null || appMode === null)) {
     return <OnboardingWizard onFinished={onOnboardingComplete} />;
   }
 
-  if (appMode === 'cloud' && (!isAuthenticated || !user)) {
+  if (!isDebugMode && appMode === 'cloud' && (!isAuthenticated || !user)) {
     return <LoginView />;
   }
 
@@ -243,12 +247,17 @@ export default function App() {
             <ToastProvider>
               <AuthProvider>
                 <PrintProvider>
-                  <AppShell
-                    configuredDataPath={configuredDataPath}
-                    onOnboardingComplete={(path) => setConfiguredDataPath(path)}
-                  />
+                  <div className="h-screen w-screen flex flex-col overflow-hidden">
+                    <div className="flex-1 min-h-0 flex flex-col overflow-y-auto">
+                      <AppShell
+                        configuredDataPath={configuredDataPath}
+                        onOnboardingComplete={(path) => setConfiguredDataPath(path)}
+                      />
+                    </div>
+                  </div>
                 </PrintProvider>
               </AuthProvider>
+              <AppContextMenu />
             </ToastProvider>
           </ThemeProvider>
         </AppErrorBoundary>

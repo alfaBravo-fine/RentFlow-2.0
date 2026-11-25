@@ -140,7 +140,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         });
       }
     } catch (err) {
-      console.warn('[AuthStore] Failed to hydrate desktop session:', err);
+      console.warn('[AuthStore] Failed to hydrate session:', err);
     }
   },
 
@@ -148,7 +148,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       await invoke<void>('google_oauth_logout');
     } catch (e) {
-      console.warn('Error logging out from Tauri backend:', e);
+      console.warn('Error signing out:', e);
     }
 
     if (typeof localStorage !== 'undefined') {

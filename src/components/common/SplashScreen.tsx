@@ -62,7 +62,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
             <div className="flex items-center gap-4 text-[11px] text-slate-400 pt-2 z-10">
               <span className="flex items-center gap-1.5 bg-slate-900/80 px-2.5 py-1 rounded-full border border-slate-800">
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Native SQLite</span>
+                <span>Private Local Storage</span>
               </span>
               <span className="flex items-center gap-1.5 bg-slate-900/80 px-2.5 py-1 rounded-full border border-slate-800">
                 <Zap className="w-3.5 h-3.5 text-amber-400" />

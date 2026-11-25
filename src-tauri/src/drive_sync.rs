@@ -12,12 +12,16 @@ use tauri::{AppHandle, State};
 use crate::auth::{
     get_authenticated_google_id, get_valid_access_token, refresh_google_access_token, AuthState,
 };
-use crate::db::{db_export_all, db_import_all, DatabaseManager};
+use crate::db::{db_export_all, db_import_all, revert_single_change, validate_table_name, DatabaseManager};
 
 const SALT: &[u8] = b"rentflow_appdata_gcm_salt_v2";
-const BACKUPS_FOLDER_NAME: &str = "RentFlow Backups";
+const BACKUPS_FOLDER_NAME: &str = "RentFlow Grouped Backups";
+const LEGACY_BACKUPS_FOLDER_NAME: &str = "RentFlow Backups";
 const MANIFEST_FILENAME: &str = "manifest.json";
-const MAX_SNAPSHOT_RETENTION: usize = 15;
+const MAX_FULL_BACKUP_RETENTION: usize = 30;
+const MAX_CHANGE_HISTORY_RETENTION: usize = 20;
+const FULL_BACKUP_CHANGE_THRESHOLD: u32 = 10;
+const FULL_BACKUP_INTERVAL_SECS: i64 = 86_400; // 24 hours
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BackupManifestEntry {
@@ -32,6 +36,61 @@ pub struct BackupManifestEntry {
     pub record_count: Option<usize>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ChangeHistoryEntry {
+    pub filename: String,
+    pub entity: String,
+    pub table: String,
+    pub action: String,
+    pub record_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    pub date: String,
+    pub size: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct GroupedManifest {
+    #[serde(default)]
+    pub full_backups: Vec<BackupManifestEntry>,
+    #[serde(default)]
+    pub change_history: Vec<ChangeHistoryEntry>,
+    #[serde(default)]
+    pub changes_since_full_backup: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_full_backup_at: Option<String>,
+    #[serde(default)]
+    pub last_full_backup_epoch: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GroupedBackupList {
+    pub full_backups: Vec<BackupManifestEntry>,
+    pub change_history: Vec<ChangeHistoryEntry>,
+    pub changes_since_full_backup: u32,
+    pub last_full_backup_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChangePayloadInput {
+    pub entity: String,
+    pub table: String,
+    pub action: String,
+    pub record_id: String,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub before: Option<serde_json::Value>,
+    #[serde(default)]
+    pub after: Option<serde_json::Value>,
+    #[serde(default)]
+    pub timestamp: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BackupSyncResult {
     pub success: bool,
@@ -40,6 +99,10 @@ pub struct BackupSyncResult {
     pub folder_id: Option<String>,
     pub filename: Option<String>,
     pub snapshot_count: usize,
+    #[serde(default)]
+    pub full_backup_triggered: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full_backup_filename: Option<String>,
     pub message: String,
 }
 
@@ -109,7 +172,7 @@ fn decrypt_payload(encrypted_bytes: &[u8], google_id: &str) -> Result<String, St
 
 fn validate_snapshot_filename(filename: &str) -> Result<(), String> {
     let trimmed = filename.trim();
-    if trimmed.is_empty() || trimmed.len() > 128 {
+    if trimmed.is_empty() || trimmed.len() > 160 {
         return Err("Invalid backup snapshot filename.".to_string());
     }
     if trimmed.contains("..") || trimmed.contains('/') || trimmed.contains('\\') {
@@ -138,13 +201,32 @@ fn validate_drive_id(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Converts UNIX epoch seconds to UTC calendar components (year, month, day, hour, minute, second)
-/// using Howard Hinnant's civil-from-days algorithm.
-fn utc_now_parts() -> (i64, u32, u32, u32, u32, u32) {
-    let secs = SystemTime::now()
+fn sanitize_slug(raw: &str, fallback: &str) -> String {
+    let cleaned: String = raw
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    let collapsed = cleaned.trim_matches('_').to_string();
+    if collapsed.is_empty() {
+        fallback.to_string()
+    } else {
+        collapsed
+    }
+}
+
+fn unix_now_secs() -> i64 {
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+        .unwrap_or(0)
+}
+
+/// Converts UNIX epoch seconds to UTC calendar components (year, month, day, hour, minute, second)
+/// using Howard Hinnant's civil-from-days algorithm.
+fn utc_now_parts() -> (i64, u32, u32, u32, u32, u32, i64) {
+    let secs = unix_now_secs();
 
     let days = secs.div_euclid(86_400);
     let secs_of_day = secs.rem_euclid(86_400) as u32;
@@ -164,7 +246,7 @@ fn utc_now_parts() -> (i64, u32, u32, u32, u32, u32) {
     let minute = (secs_of_day % 3600) / 60;
     let second = secs_of_day % 60;
 
-    (year, m as u32, d as u32, hour, minute, second)
+    (year, m as u32, d as u32, hour, minute, second, secs)
 }
 
 fn format_human_size(bytes: u64) -> String {
@@ -190,40 +272,49 @@ fn count_snapshot_records(snapshot: &serde_json::Value) -> usize {
         .unwrap_or(0)
 }
 
-fn build_unique_snapshot_filename(
-    existing: &[BackupManifestEntry],
+fn build_full_backup_filename(year: i64, month: u32, day: u32) -> String {
+    format!("FULL_BACKUP_{:04}-{:02}-{:02}.enc", year, month, day)
+}
+
+fn build_unique_change_filename(
+    existing: &[ChangeHistoryEntry],
+    entity: &str,
+    action: &str,
     year: i64,
     month: u32,
     day: u32,
     hour: u32,
     minute: u32,
 ) -> String {
+    let entity_slug = sanitize_slug(entity, "record");
+    let action_slug = sanitize_slug(action, "edit");
     let base = format!(
-        "RentFlow_Backup_{:04}-{:02}-{:02}_{:02}-{:02}",
-        year, month, day, hour, minute
+        "{}_{}_{:04}-{:02}-{:02}_{:02}{:02}",
+        entity_slug, action_slug, year, month, day, hour, minute
     );
     let primary = format!("{}.enc", base);
     if !existing.iter().any(|e| e.filename == primary) {
         return primary;
     }
 
-    let mut version = 2usize;
+    let mut suffix = 2usize;
     loop {
-        let candidate = format!("{}_v{}.enc", base, version);
+        let candidate = format!("{}_{}.enc", base, suffix);
         if !existing.iter().any(|e| e.filename == candidate) {
             return candidate;
         }
-        version += 1;
+        suffix += 1;
     }
 }
 
-async fn find_backups_folder(
+async fn find_folder_by_name(
     client: &reqwest::Client,
     token: &str,
+    folder_name: &str,
 ) -> Result<Option<DriveFileItem>, String> {
     let query = format!(
         "name = '{}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false",
-        BACKUPS_FOLDER_NAME
+        folder_name
     );
 
     let res = client
@@ -256,6 +347,16 @@ async fn find_backups_folder(
     Ok(list.files.into_iter().next())
 }
 
+async fn find_backups_folder(
+    client: &reqwest::Client,
+    token: &str,
+) -> Result<Option<DriveFileItem>, String> {
+    if let Some(grouped) = find_folder_by_name(client, token, BACKUPS_FOLDER_NAME).await? {
+        return Ok(Some(grouped));
+    }
+    find_folder_by_name(client, token, LEGACY_BACKUPS_FOLDER_NAME).await
+}
+
 async fn create_backups_folder(
     client: &reqwest::Client,
     token: &str,
@@ -280,7 +381,10 @@ async fn create_backups_folder(
 
     if !res.status().is_success() {
         let err_text = res.text().await.unwrap_or_default();
-        return Err(format!("Failed to create '{}' folder in Google Drive: {}", BACKUPS_FOLDER_NAME, err_text));
+        return Err(format!(
+            "Failed to create '{}' folder in Google Drive: {}",
+            BACKUPS_FOLDER_NAME, err_text
+        ));
     }
 
     res.json::<DriveFileItem>()
@@ -311,7 +415,25 @@ async fn get_or_create_backups_folder_resilient(
     auth_state: &AuthState,
     client: &reqwest::Client,
 ) -> Result<(String, String), String> {
-    let (mut token, existing_id) = find_backups_folder_resilient(app, auth_state, client).await?;
+    let (mut token, existing_id) = match find_folder_by_name(
+        client,
+        &get_valid_access_token(Some(app), auth_state).await?,
+        BACKUPS_FOLDER_NAME,
+    )
+    .await
+    {
+        Ok(folder) => (
+            get_valid_access_token(Some(app), auth_state).await?,
+            folder.map(|f| f.id),
+        ),
+        Err(err) if err == "UNAUTHORIZED" => {
+            let refreshed = refresh_google_access_token(Some(app), auth_state).await?;
+            let folder = find_folder_by_name(client, &refreshed, BACKUPS_FOLDER_NAME).await?;
+            (refreshed, folder.map(|f| f.id))
+        }
+        Err(err) => return Err(err),
+    };
+
     if let Some(fid) = existing_id {
         return Ok((token, fid));
     }
@@ -527,33 +649,57 @@ async fn fetch_manifest_in_folder(
     client: &reqwest::Client,
     token: &str,
     folder_id: &str,
-) -> Result<(Option<String>, Vec<BackupManifestEntry>), String> {
+) -> Result<(Option<String>, GroupedManifest), String> {
     let Some(manifest_item) =
         find_file_in_folder(client, token, folder_id, MANIFEST_FILENAME).await?
     else {
-        return Ok((None, Vec::new()));
+        return Ok((None, GroupedManifest::default()));
     };
 
     let bytes = download_drive_file_bytes(client, token, &manifest_item.id).await?;
     if bytes.is_empty() {
-        return Ok((Some(manifest_item.id), Vec::new()));
+        return Ok((Some(manifest_item.id), GroupedManifest::default()));
     }
 
-    let mut entries: Vec<BackupManifestEntry> = match serde_json::from_slice(&bytes) {
-        Ok(list) => list,
-        Err(_) => {
+    let mut manifest: GroupedManifest =
+        if let Ok(grouped) = serde_json::from_slice::<GroupedManifest>(&bytes) {
+            if !grouped.full_backups.is_empty()
+                || !grouped.change_history.is_empty()
+                || grouped.last_full_backup_at.is_some()
+                || grouped.changes_since_full_backup > 0
+            {
+                grouped
+            } else if let Ok(legacy_list) = serde_json::from_slice::<Vec<BackupManifestEntry>>(&bytes)
+            {
+                GroupedManifest {
+                    full_backups: legacy_list,
+                    ..GroupedManifest::default()
+                }
+            } else {
+                grouped
+            }
+        } else if let Ok(legacy_list) = serde_json::from_slice::<Vec<BackupManifestEntry>>(&bytes) {
+            GroupedManifest {
+                full_backups: legacy_list,
+                ..GroupedManifest::default()
+            }
+        } else {
             #[derive(Deserialize)]
             struct WrappedManifest {
                 backups: Vec<BackupManifestEntry>,
             }
-            serde_json::from_slice::<WrappedManifest>(&bytes)
+            let legacy_wrapped = serde_json::from_slice::<WrappedManifest>(&bytes)
                 .map(|w| w.backups)
-                .unwrap_or_default()
-        }
-    };
+                .unwrap_or_default();
+            GroupedManifest {
+                full_backups: legacy_wrapped,
+                ..GroupedManifest::default()
+            }
+        };
 
-    entries.sort_by(|a, b| b.date.cmp(&a.date));
-    Ok((Some(manifest_item.id), entries))
+    manifest.full_backups.sort_by(|a, b| b.date.cmp(&a.date));
+    manifest.change_history.sort_by(|a, b| b.date.cmp(&a.date));
+    Ok((Some(manifest_item.id), manifest))
 }
 
 async fn fetch_manifest_in_folder_resilient(
@@ -562,7 +708,7 @@ async fn fetch_manifest_in_folder_resilient(
     client: &reqwest::Client,
     token: &mut String,
     folder_id: &str,
-) -> Result<(Option<String>, Vec<BackupManifestEntry>), String> {
+) -> Result<(Option<String>, GroupedManifest), String> {
     match fetch_manifest_in_folder(client, token, folder_id).await {
         Ok(res) => Ok(res),
         Err(err) if err == "UNAUTHORIZED" => {
@@ -580,9 +726,9 @@ async fn save_manifest_in_folder_resilient(
     token: &mut String,
     folder_id: &str,
     manifest_file_id: Option<String>,
-    entries: &[BackupManifestEntry],
+    manifest: &GroupedManifest,
 ) -> Result<String, String> {
-    let manifest_bytes = serde_json::to_vec_pretty(entries)
+    let manifest_bytes = serde_json::to_vec_pretty(manifest)
         .map_err(|e| format!("Failed to serialize manifest.json: {}", e))?;
 
     if let Some(fid) = manifest_file_id {
@@ -633,6 +779,127 @@ async fn save_manifest_in_folder_resilient(
     }
 }
 
+async fn compile_and_upload_full_backup(
+    app: &AppHandle,
+    auth_state: &AuthState,
+    db_state: &State<'_, DatabaseManager>,
+    client: &reqwest::Client,
+    token: &mut String,
+    folder_id: &str,
+    google_id: &str,
+    manifest: &mut GroupedManifest,
+) -> Result<(BackupManifestEntry, String), String> {
+    let full_snapshot = db_export_all(db_state.clone()).await?;
+    let record_count = count_snapshot_records(&full_snapshot);
+
+    let (year, month, day, hour, minute, second, epoch_secs) = utc_now_parts();
+    let iso_timestamp = format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, hour, minute, second
+    );
+
+    let payload = serde_json::json!({
+        "app": "RentFlow",
+        "kind": "full_backup",
+        "version": "2.1.0",
+        "exportedAt": iso_timestamp,
+        "userId": google_id,
+        "data": full_snapshot
+    });
+
+    let encrypted_bytes = encrypt_payload(&payload.to_string(), google_id)?;
+    let byte_len = encrypted_bytes.len() as u64;
+    let formatted_size = format_human_size(byte_len);
+
+    let full_filename = build_full_backup_filename(year, month, day);
+
+    let existing_same_day = find_file_in_folder(client, token, folder_id, &full_filename)
+        .await
+        .ok()
+        .flatten();
+
+    let file_id = if let Some(existing) = existing_same_day {
+        match patch_drive_file(
+            client,
+            token,
+            &existing.id,
+            "application/octet-stream",
+            encrypted_bytes.clone(),
+        )
+        .await
+        {
+            Ok(()) => existing.id,
+            Err(err) if err == "UNAUTHORIZED" => {
+                *token = refresh_google_access_token(Some(app), auth_state).await?;
+                patch_drive_file(
+                    client,
+                    token,
+                    &existing.id,
+                    "application/octet-stream",
+                    encrypted_bytes,
+                )
+                .await?;
+                existing.id
+            }
+            Err(err) => return Err(err),
+        }
+    } else {
+        let uploaded = match upload_new_file_in_folder(
+            client,
+            token,
+            folder_id,
+            &full_filename,
+            "application/octet-stream",
+            encrypted_bytes.clone(),
+        )
+        .await
+        {
+            Ok(item) => item,
+            Err(err) if err == "UNAUTHORIZED" => {
+                *token = refresh_google_access_token(Some(app), auth_state).await?;
+                upload_new_file_in_folder(
+                    client,
+                    token,
+                    folder_id,
+                    &full_filename,
+                    "application/octet-stream",
+                    encrypted_bytes,
+                )
+                .await?
+            }
+            Err(err) => return Err(err),
+        };
+        uploaded.id
+    };
+
+    let entry = BackupManifestEntry {
+        filename: full_filename.clone(),
+        date: iso_timestamp.clone(),
+        size: formatted_size,
+        size_bytes: Some(byte_len),
+        file_id: Some(file_id.clone()),
+        record_count: Some(record_count),
+    };
+
+    // Replace existing entry for the same date filename so FULL_BACKUP_YYYY-MM-DD.enc stays clean
+    manifest.full_backups.retain(|b| b.filename != full_filename);
+    manifest.full_backups.insert(0, entry.clone());
+
+    while manifest.full_backups.len() > MAX_FULL_BACKUP_RETENTION {
+        if let Some(oldest) = manifest.full_backups.pop() {
+            if let Some(fid) = oldest.file_id {
+                let _ = delete_drive_file(client, token, &fid).await;
+            }
+        }
+    }
+
+    manifest.changes_since_full_backup = 0;
+    manifest.last_full_backup_at = Some(iso_timestamp);
+    manifest.last_full_backup_epoch = epoch_secs;
+
+    Ok((entry, file_id))
+}
+
 #[tauri::command]
 pub async fn drive_push_backup(
     app: AppHandle,
@@ -656,43 +923,133 @@ pub async fn drive_push_backup(
         _ => session_google_id,
     };
 
-    let full_snapshot = db_export_all(db_state.clone()).await?;
-    let record_count = count_snapshot_records(&full_snapshot);
+    let client = reqwest::Client::new();
+    let (mut token, folder_id) =
+        get_or_create_backups_folder_resilient(&app, &auth_state, &client).await?;
 
-    let (year, month, day, hour, minute, second) = utc_now_parts();
-    let iso_timestamp = format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        year, month, day, hour, minute, second
+    let (manifest_file_id, mut manifest) =
+        fetch_manifest_in_folder_resilient(&app, &auth_state, &client, &mut token, &folder_id)
+            .await?;
+
+    let (entry, uploaded_id) = compile_and_upload_full_backup(
+        &app,
+        &auth_state,
+        &db_state,
+        &client,
+        &mut token,
+        &folder_id,
+        &effective_google_id,
+        &mut manifest,
+    )
+    .await?;
+
+    save_manifest_in_folder_resilient(
+        &app,
+        &auth_state,
+        &client,
+        &mut token,
+        &folder_id,
+        manifest_file_id,
+        &manifest,
+    )
+    .await?;
+
+    *auth_state.drive_file_id.lock().map_err(|e| e.to_string())? = Some(uploaded_id.clone());
+
+    Ok(BackupSyncResult {
+        success: true,
+        synced_at: entry.date.clone(),
+        file_id: Some(uploaded_id),
+        folder_id: Some(folder_id),
+        filename: Some(entry.filename.clone()),
+        snapshot_count: manifest.full_backups.len(),
+        full_backup_triggered: true,
+        full_backup_filename: Some(entry.filename.clone()),
+        message: format!(
+            "Saved full backup {} in '{}'",
+            entry.filename, BACKUPS_FOLDER_NAME
+        ),
+    })
+}
+
+#[tauri::command]
+pub async fn drive_push_change(
+    change: ChangePayloadInput,
+    google_id: Option<String>,
+    app: AppHandle,
+    auth_state: State<'_, AuthState>,
+    db_state: State<'_, DatabaseManager>,
+) -> Result<BackupSyncResult, String> {
+    let _sync_guard = auth_state.sync_lock.lock().await;
+
+    validate_table_name(&change.table)?;
+    let action_slug = sanitize_slug(&change.action, "edit");
+    if action_slug != "add" && action_slug != "edit" && action_slug != "delete" {
+        return Err(format!("Invalid change action '{}'.", change.action));
+    }
+
+    let session_google_id = get_authenticated_google_id(&auth_state)?;
+    let effective_google_id = match google_id {
+        Some(ref gid) if !gid.trim().is_empty() => {
+            if gid != &session_google_id {
+                return Err("Google User ID does not match active authenticated session.".into());
+            }
+            gid.clone()
+        }
+        _ => session_google_id,
+    };
+
+    let (year, month, day, hour, minute, second, epoch_secs) = utc_now_parts();
+    let iso_timestamp = change.timestamp.clone().unwrap_or_else(|| {
+        format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+            year, month, day, hour, minute, second
+        )
+    });
+
+    let client = reqwest::Client::new();
+    let (mut token, folder_id) =
+        get_or_create_backups_folder_resilient(&app, &auth_state, &client).await?;
+
+    let (manifest_file_id, mut manifest) =
+        fetch_manifest_in_folder_resilient(&app, &auth_state, &client, &mut token, &folder_id)
+            .await?;
+
+    let change_filename = build_unique_change_filename(
+        &manifest.change_history,
+        &change.entity,
+        &action_slug,
+        year,
+        month,
+        day,
+        hour,
+        minute,
     );
 
     let payload = serde_json::json!({
         "app": "RentFlow",
-        "version": "2.0.0",
-        "exportedAt": iso_timestamp,
-        "userId": effective_google_id,
-        "data": full_snapshot
+        "kind": "change_snapshot",
+        "version": "2.1.0",
+        "entity": sanitize_slug(&change.entity, "record"),
+        "table": change.table,
+        "action": action_slug,
+        "record_id": change.record_id,
+        "summary": change.summary,
+        "before": change.before,
+        "after": change.after,
+        "timestamp": iso_timestamp,
+        "userId": effective_google_id
     });
 
     let encrypted_bytes = encrypt_payload(&payload.to_string(), &effective_google_id)?;
     let byte_len = encrypted_bytes.len() as u64;
     let formatted_size = format_human_size(byte_len);
 
-    let client = reqwest::Client::new();
-    let (mut token, folder_id) =
-        get_or_create_backups_folder_resilient(&app, &auth_state, &client).await?;
-
-    let (manifest_file_id, mut manifest_entries) =
-        fetch_manifest_in_folder_resilient(&app, &auth_state, &client, &mut token, &folder_id)
-            .await?;
-
-    let snapshot_filename =
-        build_unique_snapshot_filename(&manifest_entries, year, month, day, hour, minute);
-
     let uploaded = match upload_new_file_in_folder(
         &client,
         &token,
         &folder_id,
-        &snapshot_filename,
+        &change_filename,
         "application/octet-stream",
         encrypted_bytes.clone(),
     )
@@ -705,7 +1062,7 @@ pub async fn drive_push_backup(
                 &client,
                 &token,
                 &folder_id,
-                &snapshot_filename,
+                &change_filename,
                 "application/octet-stream",
                 encrypted_bytes,
             )
@@ -714,23 +1071,26 @@ pub async fn drive_push_backup(
         Err(err) => return Err(err),
     };
 
-    // Prepend newest snapshot
-    manifest_entries.insert(
+    manifest.change_history.insert(
         0,
-        BackupManifestEntry {
-            filename: snapshot_filename.clone(),
+        ChangeHistoryEntry {
+            filename: change_filename.clone(),
+            entity: sanitize_slug(&change.entity, "record"),
+            table: change.table,
+            action: action_slug,
+            record_id: change.record_id,
+            summary: change.summary,
             date: iso_timestamp.clone(),
             size: formatted_size,
             size_bytes: Some(byte_len),
             file_id: Some(uploaded.id.clone()),
-            record_count: Some(record_count),
         },
     );
 
-    // Keep the 15 most recent snapshots; delete older snapshot files from Google Drive
-    while manifest_entries.len() > MAX_SNAPSHOT_RETENTION {
-        if let Some(oldest) = manifest_entries.pop() {
-            let oldest_file_id = match oldest.file_id {
+    // Keep last 20 small changes and purge older files from Google Drive
+    while manifest.change_history.len() > MAX_CHANGE_HISTORY_RETENTION {
+        if let Some(oldest) = manifest.change_history.pop() {
+            let oldest_fid = match oldest.file_id {
                 Some(fid) if !fid.is_empty() => Some(fid),
                 _ => find_file_in_folder(&client, &token, &folder_id, &oldest.filename)
                     .await
@@ -738,23 +1098,43 @@ pub async fn drive_push_backup(
                     .flatten()
                     .map(|f| f.id),
             };
-
-            if let Some(fid) = oldest_file_id {
+            if let Some(fid) = oldest_fid {
                 match delete_drive_file(&client, &token, &fid).await {
                     Ok(()) => {}
                     Err(err) if err == "UNAUTHORIZED" => {
                         token = refresh_google_access_token(Some(&app), &auth_state).await?;
                         let _ = delete_drive_file(&client, &token, &fid).await;
                     }
-                    Err(err) => {
-                        eprintln!(
-                            "[RentFlow Drive] Warning: could not delete old snapshot {}: {}",
-                            oldest.filename, err
-                        );
-                    }
+                    Err(err) => eprintln!(
+                        "[RentFlow Drive] Warning: failed purging oldest change {}: {}",
+                        oldest.filename, err
+                    ),
                 }
             }
         }
+    }
+
+    manifest.changes_since_full_backup = manifest.changes_since_full_backup.saturating_add(1);
+
+    let elapsed_since_full = epoch_secs.saturating_sub(manifest.last_full_backup_epoch);
+    let should_trigger_full = manifest.changes_since_full_backup >= FULL_BACKUP_CHANGE_THRESHOLD
+        || manifest.last_full_backup_epoch <= 0
+        || elapsed_since_full >= FULL_BACKUP_INTERVAL_SECS;
+
+    let mut full_backup_filename: Option<String> = None;
+    if should_trigger_full {
+        let (full_entry, _) = compile_and_upload_full_backup(
+            &app,
+            &auth_state,
+            &db_state,
+            &client,
+            &mut token,
+            &folder_id,
+            &effective_google_id,
+            &mut manifest,
+        )
+        .await?;
+        full_backup_filename = Some(full_entry.filename);
     }
 
     save_manifest_in_folder_resilient(
@@ -764,7 +1144,7 @@ pub async fn drive_push_backup(
         &mut token,
         &folder_id,
         manifest_file_id,
-        &manifest_entries,
+        &manifest,
     )
     .await?;
 
@@ -775,15 +1155,53 @@ pub async fn drive_push_backup(
         synced_at: iso_timestamp,
         file_id: Some(uploaded.id),
         folder_id: Some(folder_id),
-        filename: Some(snapshot_filename.clone()),
-        snapshot_count: manifest_entries.len(),
-        message: format!(
-            "Saved snapshot {} in '{}' ({} of {} snapshots kept)",
-            snapshot_filename,
-            BACKUPS_FOLDER_NAME,
-            manifest_entries.len(),
-            MAX_SNAPSHOT_RETENTION
-        ),
+        filename: Some(change_filename.clone()),
+        snapshot_count: manifest.change_history.len(),
+        full_backup_triggered: should_trigger_full,
+        full_backup_filename,
+        message: if should_trigger_full {
+            format!(
+                "Saved change {} and compiled grouped full backup in '{}'",
+                change_filename, BACKUPS_FOLDER_NAME
+            )
+        } else {
+            format!(
+                "Saved change {} ({}/{} before next full backup)",
+                change_filename, manifest.changes_since_full_backup, FULL_BACKUP_CHANGE_THRESHOLD
+            )
+        },
+    })
+}
+
+#[tauri::command]
+pub async fn get_grouped_backup_list(
+    app: AppHandle,
+    auth_state: State<'_, AuthState>,
+) -> Result<GroupedBackupList, String> {
+    let _ = get_authenticated_google_id(&auth_state)?;
+    let client = reqwest::Client::new();
+
+    let (mut token, folder_id_opt) =
+        find_backups_folder_resilient(&app, &auth_state, &client).await?;
+
+    let Some(folder_id) = folder_id_opt else {
+        return Ok(GroupedBackupList {
+            full_backups: Vec::new(),
+            change_history: Vec::new(),
+            changes_since_full_backup: 0,
+            last_full_backup_at: None,
+        });
+    };
+
+    let (_manifest_fid, manifest) =
+        fetch_manifest_in_folder_resilient(&app, &auth_state, &client, &mut token, &folder_id)
+            .await?;
+
+    Ok(GroupedBackupList {
+        full_backups: manifest.full_backups,
+        change_history: manifest.change_history,
+        changes_since_full_backup: manifest.changes_since_full_backup,
+        last_full_backup_at: manifest.last_full_backup_at,
     })
 }
 
@@ -792,21 +1210,8 @@ pub async fn get_backup_list(
     app: AppHandle,
     auth_state: State<'_, AuthState>,
 ) -> Result<Vec<BackupManifestEntry>, String> {
-    let _ = get_authenticated_google_id(&auth_state)?;
-    let client = reqwest::Client::new();
-
-    let (mut token, folder_id_opt) =
-        find_backups_folder_resilient(&app, &auth_state, &client).await?;
-
-    let Some(folder_id) = folder_id_opt else {
-        return Ok(Vec::new());
-    };
-
-    let (_manifest_file_id, entries) =
-        fetch_manifest_in_folder_resilient(&app, &auth_state, &client, &mut token, &folder_id)
-            .await?;
-
-    Ok(entries)
+    let grouped = get_grouped_backup_list(app, auth_state).await?;
+    Ok(grouped.full_backups)
 }
 
 #[tauri::command]
@@ -830,11 +1235,12 @@ pub async fn restore_from_snapshot(
         ));
     };
 
-    let (_manifest_fid, manifest_entries) =
+    let (_manifest_fid, manifest) =
         fetch_manifest_in_folder_resilient(&app, &auth_state, &client, &mut token, &folder_id)
             .await?;
 
-    let mut target_file_id = manifest_entries
+    let mut target_file_id = manifest
+        .full_backups
         .iter()
         .find(|e| e.filename == filename)
         .and_then(|e| e.file_id.clone());
@@ -892,9 +1298,101 @@ pub async fn restore_from_snapshot(
         restored: true,
         filename: Some(filename.clone()),
         message: format!(
-            "Successfully restored SQLite database from snapshot {}",
+            "Successfully restored SQLite database from full backup {}",
             filename
         ),
+    })
+}
+
+#[tauri::command]
+pub async fn revert_change_snapshot(
+    filename: String,
+    app: AppHandle,
+    auth_state: State<'_, AuthState>,
+    db_state: State<'_, DatabaseManager>,
+) -> Result<DrivePullResult, String> {
+    validate_snapshot_filename(&filename)?;
+    let google_id = get_authenticated_google_id(&auth_state)?;
+    let client = reqwest::Client::new();
+
+    let (mut token, folder_id_opt) =
+        find_backups_folder_resilient(&app, &auth_state, &client).await?;
+
+    let Some(folder_id) = folder_id_opt else {
+        return Err(format!(
+            "Folder '{}' was not found in your Google Drive.",
+            BACKUPS_FOLDER_NAME
+        ));
+    };
+
+    let (_manifest_fid, manifest) =
+        fetch_manifest_in_folder_resilient(&app, &auth_state, &client, &mut token, &folder_id)
+            .await?;
+
+    let mut target_file_id = manifest
+        .change_history
+        .iter()
+        .find(|e| e.filename == filename)
+        .and_then(|e| e.file_id.clone());
+
+    if target_file_id.is_none() {
+        target_file_id =
+            match find_file_in_folder(&client, &token, &folder_id, &filename).await {
+                Ok(found) => found.map(|f| f.id),
+                Err(err) if err == "UNAUTHORIZED" => {
+                    token = refresh_google_access_token(Some(&app), &auth_state).await?;
+                    find_file_in_folder(&client, &token, &folder_id, &filename)
+                        .await?
+                        .map(|f| f.id)
+                }
+                Err(err) => return Err(err),
+            };
+    }
+
+    let Some(fid) = target_file_id else {
+        return Err(format!(
+            "Change snapshot '{}' was not found inside '{}' in Google Drive.",
+            filename, BACKUPS_FOLDER_NAME
+        ));
+    };
+
+    let bytes = match download_drive_file_bytes(&client, &token, &fid).await {
+        Ok(b) => b,
+        Err(err) if err == "UNAUTHORIZED" => {
+            token = refresh_google_access_token(Some(&app), &auth_state).await?;
+            download_drive_file_bytes(&client, &token, &fid).await?
+        }
+        Err(err) => return Err(err),
+    };
+
+    if bytes.len() < 12 {
+        return Err(format!("Change snapshot '{}' is empty or corrupted.", filename));
+    }
+
+    let decrypted_str = decrypt_payload(&bytes, &google_id)?;
+    let parsed: serde_json::Value = serde_json::from_str(&decrypted_str)
+        .map_err(|e| format!("Failed to parse decrypted change snapshot JSON: {}", e))?;
+
+    let table = parsed
+        .get("table")
+        .and_then(|v| v.as_str())
+        .ok_or("Change snapshot missing table name.")?;
+    let action = parsed
+        .get("action")
+        .and_then(|v| v.as_str())
+        .ok_or("Change snapshot missing action.")?;
+    let record_id = parsed
+        .get("record_id")
+        .and_then(|v| v.as_str())
+        .ok_or("Change snapshot missing record_id.")?;
+    let before = parsed.get("before");
+
+    let revert_msg = revert_single_change(&db_state, table, action, record_id, before)?;
+
+    Ok(DrivePullResult {
+        restored: true,
+        filename: Some(filename),
+        message: revert_msg,
     })
 }
 
@@ -918,7 +1416,7 @@ pub async fn drive_pull_backup(
             restored: false,
             filename: None,
             message: format!(
-                "No backup snapshots found in '{}' in Google Drive",
+                "No full backups found in '{}' in Google Drive",
                 BACKUPS_FOLDER_NAME
             ),
         });

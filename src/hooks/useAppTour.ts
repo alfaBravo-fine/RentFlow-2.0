@@ -182,7 +182,7 @@ export function useAppTour(autoStartOnFirstVisit = false): UseAppTourReturn {
         element: '[data-tour="sidebar-properties"]',
         popover: {
           title: 'Go to Properties',
-          description: 'Click this link. The tour will wait for you.',
+          description: 'Select Properties & Units to view and manage your buildings.',
           side: 'right',
           align: 'center',
           showButtons: ['close'],
@@ -224,7 +224,7 @@ export function useAppTour(autoStartOnFirstVisit = false): UseAppTourReturn {
         allowedElements: ['[role="dialog"]', '[data-tour="input-property-name"]'],
         popover: {
           title: 'Name your building',
-          description: "Type a name, like 'My First Building'.",
+          description: 'Enter a name for your property, then select Next.',
           side: 'bottom',
           align: 'start',
           showButtons: ['next', 'close'],
@@ -281,7 +281,7 @@ export function useAppTour(autoStartOnFirstVisit = false): UseAppTourReturn {
         element: '[data-tour="btn-add-tenant"]',
         popover: {
           title: 'Add a Tenant',
-          description: 'Click to open the tenant form. (Wait for click).',
+          description: 'Select Add Tenant to open the registration form.',
           side: 'bottom',
           align: 'end',
           showButtons: ['close'],
@@ -303,7 +303,7 @@ export function useAppTour(autoStartOnFirstVisit = false): UseAppTourReturn {
         allowedElements: ['[role="dialog"]', '[data-tour="input-tenant-name"]'],
         popover: {
           title: 'Enter Tenant Name',
-          description: "Type 'John Doe'.",
+          description: 'Enter your tenant’s full name, then select Next.',
           side: 'bottom',
           align: 'start',
           showButtons: ['next', 'close'],
@@ -382,7 +382,7 @@ export function useAppTour(autoStartOnFirstVisit = false): UseAppTourReturn {
         allowedElements: ['[role="dialog"]', '[data-tour="select-tenant"]'],
         popover: {
           title: 'Select the Tenant',
-          description: "Choose 'John Doe'.",
+          description: 'Choose your newly added tenant, then select Next.',
           side: 'bottom',
           align: 'start',
           showButtons: ['next', 'close'],

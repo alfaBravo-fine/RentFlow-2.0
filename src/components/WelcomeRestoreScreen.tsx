@@ -146,7 +146,7 @@ export const WelcomeRestoreScreen: React.FC<WelcomeRestoreScreenProps> = ({
           <div className="flex items-start gap-2.5 text-xs text-[var(--text-secondary)] p-3 rounded-xl bg-emerald-500/5 border border-emerald-500/20">
             <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
             <span className="leading-relaxed">
-              Starting fresh creates a clean local SQLite database without deleting your existing snapshot history in Google Drive.
+              Starting fresh creates a clean local portfolio without deleting your existing snapshot history in Google Drive.
             </span>
           </div>
 
@@ -168,7 +168,7 @@ export const WelcomeRestoreScreen: React.FC<WelcomeRestoreScreenProps> = ({
               className="h-11 px-5 gap-2 justify-center"
             >
               <Plus className="w-4 h-4" />
-              <span>{isStartingFresh ? 'Initializing Empty DB...' : 'Start Fresh'}</span>
+              <span>{isStartingFresh ? 'Starting Fresh...' : 'Start Fresh'}</span>
             </Button>
 
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
