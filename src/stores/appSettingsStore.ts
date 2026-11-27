@@ -33,6 +33,9 @@ export interface AppSettingsData {
   autoSyncEnabled: boolean;
   launchAtStartup: boolean;
   exportDestination: string;
+  masterExcelFolder: string;
+  masterExcelAutoSync: boolean;
+  lastMasterExcelSync: string | null;
   agencyCommissionPct: number;
   maintenanceApprovalThresholdMinor: number;
   lastDriveSync: string | null;
@@ -50,6 +53,9 @@ interface AppSettingsStore extends AppSettingsData {
   setAutoSyncEnabled: (enabled: boolean) => void;
   setLaunchAtStartup: (enabled: boolean) => void;
   setExportDestination: (dest: string) => void;
+  setMasterExcelFolder: (folder: string) => void;
+  setMasterExcelAutoSync: (enabled: boolean) => void;
+  setLastMasterExcelSync: (syncedAt: string | null) => void;
   setAgencyCommissionPct: (pct: number) => void;
   setMaintenanceApprovalThresholdMinor: (minor: number) => void;
   setLastDriveSync: (syncedAt: string | null) => void;
@@ -60,30 +66,7 @@ interface AppSettingsStore extends AppSettingsData {
 
 const STORE_KEY = 'rentflow_app_settings_v1';
 
-const DEFAULT_TODOS: CalendarTodoTask[] = [
-  {
-    id: 't1',
-    title: 'Perform pre-inspection walk-through for Unit 4B',
-    priority: 'high',
-    dueDate: new Date().toISOString().slice(0, 10),
-    completed: false,
-    category: 'inspection',
-  },
-  {
-    id: 't2',
-    title: 'Issue rent increase statutory notice (Country Pack compliance)',
-    priority: 'medium',
-    completed: false,
-    category: 'lease',
-  },
-  {
-    id: 't3',
-    title: 'Audit monthly HVAC vendor invoices',
-    priority: 'normal',
-    completed: true,
-    category: 'maintenance',
-  },
-];
+const DEFAULT_TODOS: CalendarTodoTask[] = [];
 
 function createDefaultState(): AppSettingsData {
   return {
@@ -95,6 +78,9 @@ function createDefaultState(): AppSettingsData {
     autoSyncEnabled: true,
     launchAtStartup: false,
     exportDestination: 'C:\\Users\\Documents\\RentFlowExports',
+    masterExcelFolder: '',
+    masterExcelAutoSync: true,
+    lastMasterExcelSync: null,
     agencyCommissionPct: 8,
     maintenanceApprovalThresholdMinor: 50000,
     lastDriveSync: null,
@@ -204,6 +190,9 @@ function extractData(s: AppSettingsStore): AppSettingsData {
     autoSyncEnabled: s.autoSyncEnabled,
     launchAtStartup: s.launchAtStartup,
     exportDestination: s.exportDestination,
+    masterExcelFolder: s.masterExcelFolder,
+    masterExcelAutoSync: s.masterExcelAutoSync,
+    lastMasterExcelSync: s.lastMasterExcelSync,
     agencyCommissionPct: s.agencyCommissionPct,
     maintenanceApprovalThresholdMinor: s.maintenanceApprovalThresholdMinor,
     lastDriveSync: s.lastDriveSync,
@@ -265,6 +254,21 @@ export const useAppSettingsStore = create<AppSettingsStore>((set, get) => ({
 
   setExportDestination: (exportDestination) => {
     set({ exportDestination });
+    persistSettings(extractData(get()));
+  },
+
+  setMasterExcelFolder: (masterExcelFolder) => {
+    set({ masterExcelFolder });
+    persistSettings(extractData(get()));
+  },
+
+  setMasterExcelAutoSync: (masterExcelAutoSync) => {
+    set({ masterExcelAutoSync });
+    persistSettings(extractData(get()));
+  },
+
+  setLastMasterExcelSync: (lastMasterExcelSync) => {
+    set({ lastMasterExcelSync });
     persistSettings(extractData(get()));
   },
 

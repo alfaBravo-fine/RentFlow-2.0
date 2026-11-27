@@ -6,6 +6,7 @@ import { usePackStore } from '../countries/usePack';
 import { useUIStore, UILayout } from '../stores/uiStore';
 import { useAppSettingsStore } from '../stores/appSettingsStore';
 import {
+  BackupGroupEntry,
   BackupManifestEntry,
   ChangeHistoryEntry,
   GroupedBackupList,
@@ -13,11 +14,12 @@ import {
   TauriSyncResult,
 } from './tauri/bridge';
 
-export type { BackupManifestEntry, ChangeHistoryEntry, GroupedBackupList };
+export type { BackupGroupEntry, BackupManifestEntry, ChangeHistoryEntry, GroupedBackupList };
 export const GROUPED_BACKUPS_FOLDER_NAME = 'RentFlow Grouped Backups';
 export const MAX_CHANGE_HISTORY_RETENTION = 20;
 export const FULL_BACKUP_CHANGE_THRESHOLD = 10;
 export const FULL_BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+export const GROUP_WINDOW_MS = 60 * 60 * 1000;
 
 export const APP_DATA_BACKUP_FILENAME = 'RentFlow_FullBackup.enc';
 export const LEGACY_BACKUP_FILENAME = 'RentFlowBackup.enc';
@@ -109,6 +111,55 @@ export function formatChangeSnapshotFilename(
   const hh = pad(date.getUTCHours());
   const min = pad(date.getUTCMinutes());
   return `${cleanEntity}_${cleanAction}_${yyyy}-${mm}-${dd}_${hh}${min}.enc`;
+}
+
+/**
+ * Formats an hourly Google Drive group subfolder name: `Backup_YYYY-MM-DD_HH-mm`.
+ */
+export function formatGroupFolderName(date: Date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const yyyy = date.getUTCFullYear();
+  const mm = pad(date.getUTCMonth() + 1);
+  const dd = pad(date.getUTCDate());
+  const hh = pad(date.getUTCHours());
+  const min = pad(date.getUTCMinutes());
+  return `Backup_${yyyy}-${mm}-${dd}_${hh}-${min}`;
+}
+
+/**
+ * Formats an itemized change file inside an hourly group folder: `<entity>_<action>_<HH>-<mm>.enc`.
+ */
+export function formatGroupChangeFilename(
+  entity: string,
+  action: DBChangeAction | string,
+  date: Date = new Date()
+): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const cleanEntity = String(entity || 'record')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '') || 'record';
+  const cleanAction = String(action || 'edit')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '') || 'edit';
+
+  const hh = pad(date.getUTCHours());
+  const min = pad(date.getUTCMinutes());
+  return `${cleanEntity}_${cleanAction}_${hh}-${min}.enc`;
+}
+
+/**
+ * Checks if a change timestamp still falls within the 1-hour window of the active group.
+ */
+export function isWithinGroupHourWindow(
+  groupStartMs: number,
+  nowMs: number = Date.now()
+): boolean {
+  if (!Number.isFinite(groupStartMs) || groupStartMs <= 0) return false;
+  return nowMs >= groupStartMs && nowMs - groupStartMs < GROUP_WINDOW_MS;
 }
 
 /**
@@ -396,13 +447,17 @@ export async function getBackupList(): Promise<BackupManifestEntry[]> {
 }
 
 export async function restoreFromSnapshot(
-  filename: string
+  filename: string,
+  folderId?: string
 ): Promise<{ restored: boolean; filename?: string; message: string; totalRecords: number }> {
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
     throw new Error('Offline: Connect to the internet to restore a snapshot from Google Drive.');
   }
 
-  const result = await invoke<TauriPullResult>('restore_from_snapshot', { filename });
+  const result = await invoke<TauriPullResult>('restore_from_snapshot', {
+    filename,
+    ...(folderId ? { folderId } : {}),
+  });
   let totalRecords = 0;
 
   if (result.restored) {
@@ -417,14 +472,40 @@ export async function restoreFromSnapshot(
   };
 }
 
+export async function restoreGroupBackup(
+  folderName: string
+): Promise<{ restored: boolean; filename?: string; message: string; totalRecords: number }> {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    throw new Error('Offline: Connect to the internet to restore a grouped backup from Google Drive.');
+  }
+
+  const result = await invoke<TauriPullResult>('restore_group_backup', { folderName });
+  let totalRecords = 0;
+
+  if (result.restored) {
+    totalRecords = await hydrateClientFromSqlite();
+  }
+
+  return {
+    restored: result.restored,
+    filename: result.filename || folderName,
+    message: result.message,
+    totalRecords,
+  };
+}
+
 export async function revertChangeSnapshot(
-  filename: string
+  filename: string,
+  folderId?: string
 ): Promise<{ restored: boolean; filename?: string; message: string; totalRecords: number }> {
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
     throw new Error('Offline: Connect to the internet to revert a change from Google Drive.');
   }
 
-  const result = await invoke<TauriPullResult>('revert_change_snapshot', { filename });
+  const result = await invoke<TauriPullResult>('revert_change_snapshot', {
+    filename,
+    ...(folderId ? { folderId } : {}),
+  });
   let totalRecords = 0;
 
   if (result.restored) {

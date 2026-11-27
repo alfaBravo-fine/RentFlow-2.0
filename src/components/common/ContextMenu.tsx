@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { ChevronLeft, Copy, Home, Moon, RefreshCw, Sun } from '../icons';
 import { useTheme } from '../theme/ThemeProvider';
@@ -80,7 +81,7 @@ export const AppContextMenu: React.FC = () => {
     };
   }, []);
 
-  if (!menu.visible) return null;
+  if (!menu.visible || typeof document === 'undefined') return null;
 
   const handleCopy = async () => {
     const textToCopy = menu.selectedText;
@@ -115,20 +116,26 @@ export const AppContextMenu: React.FC = () => {
     }
   };
 
-  return (
-    <div
-      ref={menuRef}
-      role="menu"
-      aria-label="RentFlow actions"
-      style={{ top: menu.y, left: menu.x }}
-      className="no-print fixed z-[200] w-48 rounded-xl border border-[var(--border-strong)] bg-[var(--bg-popover,var(--bg-surface))] modal-shadow py-1.5 text-xs select-none"
-    >
-      {menu.selectedText && (
-        <button
-          type="button"
-          onClick={() => void handleCopy()}
-          className="w-full px-3.5 py-2 text-left text-[var(--text-primary)] hover:bg-[var(--bg-base)] flex items-center gap-2.5 cursor-pointer"
-        >
+  return createPortal(
+    <>
+      <div
+        className="menu-backdrop-blur z-[190] no-print animate-in fade-in duration-100"
+        onClick={() => setMenu((prev) => ({ ...prev, visible: false }))}
+        aria-hidden="true"
+      />
+      <div
+        ref={menuRef}
+        role="menu"
+        aria-label="RentFlow actions"
+        style={{ top: menu.y, left: menu.x }}
+        className="no-print fixed z-[200] w-48 rounded-xl solid-menu-surface bg-[var(--bg-surface)] py-1.5 text-xs select-none animate-in fade-in zoom-in-95 duration-100"
+      >
+        {menu.selectedText && (
+          <button
+            type="button"
+            onClick={() => void handleCopy()}
+            className="w-full px-3.5 py-2 text-left text-[var(--text-primary)] hover:bg-[var(--bg-surface-sunken)] flex items-center gap-2.5 cursor-pointer"
+          >
           <Copy className="w-3.5 h-3.5 text-[var(--accent)]" />
           <span>Copy</span>
         </button>
@@ -193,12 +200,14 @@ export const AppContextMenu: React.FC = () => {
           setMenu((prev) => ({ ...prev, visible: false }));
           window.location.reload();
         }}
-        className="w-full px-3.5 py-2 text-left text-[var(--text-primary)] hover:bg-[var(--bg-base)] flex items-center gap-2.5 cursor-pointer"
+        className="w-full px-3.5 py-2 text-left text-[var(--text-primary)] hover:bg-[var(--bg-surface-sunken)] flex items-center gap-2.5 cursor-pointer"
       >
         <RefreshCw className="w-3.5 h-3.5 text-[var(--text-secondary)]" />
         <span>Refresh App</span>
       </button>
     </div>
+    </>,
+    document.body
   );
 };
 

@@ -21,10 +21,27 @@ import {
   WelcomeRestoreScreen,
   getCloudOnboardingStorageKey,
 } from './components/WelcomeRestoreScreen';
+import { db } from './db/client';
 import { databaseService } from './db/DatabaseService';
-import { getBackupList, isLocalDatabaseEmpty } from './lib/googleDriveService';
+import {
+  getBackupList,
+  isAutoSyncWriteSuppressed,
+  isLocalDatabaseEmpty,
+} from './lib/googleDriveService';
+import { syncMasterExcelFile } from './lib/excelExport';
 import { BackupManifestEntry } from './lib/tauri/bridge';
 import { AppMode, useAuthStore, UserProfile } from './stores/authStore';
+import { useAppSettingsStore } from './stores/appSettingsStore';
+
+const MASTER_EXCEL_WATCHED_TABLES = new Set([
+  'properties',
+  'units',
+  'tenants',
+  'leases',
+  'invoices',
+  'payments',
+  'expenses',
+]);
 
 const isDebugMode = false;
 
@@ -169,6 +186,40 @@ function AuthenticatedContent() {
     };
   }, [appMode, user?.sub]);
 
+  // Auto-sync Live Excel Master File on portfolio entity mutations
+  useEffect(() => {
+    if (!isDbReady) return;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const unsubscribe = db.onEntityChange((evt) => {
+      if (isAutoSyncWriteSuppressed()) return;
+      if (!MASTER_EXCEL_WATCHED_TABLES.has(evt.table)) return;
+
+      const { masterExcelAutoSync, masterExcelFolder } = useAppSettingsStore.getState();
+      if (!masterExcelAutoSync || !masterExcelFolder.trim()) return;
+
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+      }
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null;
+        void syncMasterExcelFile({
+          targetFolder: masterExcelFolder.trim(),
+          silentDownload: true,
+        }).catch((err) => {
+          console.warn('[MasterExcelSync] Auto-sync skipped or failed:', err);
+        });
+      }, 650);
+    });
+
+    return () => {
+      unsubscribe();
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+      }
+    };
+  }, [isDbReady]);
+
   if (!isDbReady) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[var(--bg-base)] text-[var(--text-secondary)] p-6">
@@ -285,7 +336,7 @@ export default function App() {
               <AuthProvider>
                 <PrintProvider>
                   <div className="h-screen w-screen flex flex-col overflow-hidden">
-                    <div className="flex-1 min-h-0 flex flex-col overflow-y-auto">
+                    <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
                       <AppShell
                         configuredDataPath={configuredDataPath}
                         onOnboardingComplete={(path) => setConfiguredDataPath(path)}

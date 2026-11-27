@@ -4,17 +4,23 @@ import { Button } from './ui/Button';
 import {
   AlertCircle,
   Calendar,
-  CheckCircle2,
+  ChevronRight,
   Cloud,
   Database,
   Download,
+  Folder,
   History,
   RefreshCw,
   RotateCcw,
   ShieldCheck,
 } from './icons';
 import { useDriveSync } from '../hooks/useDriveSync';
-import { BackupManifestEntry, ChangeHistoryEntry } from '../lib/tauri/bridge';
+import {
+  BackupGroupEntry,
+  BackupManifestEntry,
+  ChangeHistoryEntry,
+  GroupedBackupList,
+} from '../lib/tauri/bridge';
 import { useToast } from './toast/ToastContext';
 
 export interface RestoreModalProps {
@@ -73,41 +79,114 @@ export function formatChangeSummary(entry: ChangeHistoryEntry): string {
   return `${headline} · ${timeLabel}`;
 }
 
+export function formatGroupTitle(group: BackupGroupEntry): string {
+  const isoCandidate = group.created_at || group.updated_at;
+  if (isoCandidate) {
+    const parsed = new Date(isoCandidate);
+    if (!Number.isNaN(parsed.getTime())) {
+      const datePart = parsed.toLocaleDateString(undefined, {
+        month: 'short',
+        day: 'numeric',
+      });
+      const timePart = parsed.toLocaleTimeString(undefined, {
+        hour: 'numeric',
+        minute: '2-digit',
+      });
+      return `Backup ${datePart}, ${timePart}`;
+    }
+  }
+  return group.folder_name;
+}
+
+function buildFallbackGroups(grouped: GroupedBackupList): BackupGroupEntry[] {
+  if (Array.isArray(grouped.groups) && grouped.groups.length > 0) {
+    return grouped.groups;
+  }
+
+  const map = new Map<string, BackupGroupEntry>();
+
+  for (const full of grouped.full_backups || []) {
+    const datePrefix = full.date ? full.date.slice(0, 10) : '2026-01-01';
+    const hourPrefix = full.date && full.date.length >= 13 ? full.date.slice(11, 13) : '00';
+    const folderName = full.folder_name || `Backup_${datePrefix}_${hourPrefix}-00`;
+    const existing = map.get(folderName) || {
+      folder_name: folderName,
+      folder_id: full.folder_id,
+      created_at: full.date,
+      updated_at: full.date,
+      started_epoch: 0,
+      changes: [],
+    };
+    if (!existing.full_snapshot_filename) {
+      existing.full_snapshot_filename = full.filename;
+      existing.full_snapshot_file_id = full.file_id;
+      existing.full_snapshot_size = full.size;
+      existing.record_count = full.record_count;
+    }
+    map.set(folderName, existing);
+  }
+
+  for (const ch of grouped.change_history || []) {
+    const datePrefix = ch.date ? ch.date.slice(0, 10) : '2026-01-01';
+    const hourPrefix = ch.date && ch.date.length >= 13 ? ch.date.slice(11, 13) : '00';
+    const folderName = ch.folder_name || `Backup_${datePrefix}_${hourPrefix}-00`;
+    const existing = map.get(folderName) || {
+      folder_name: folderName,
+      folder_id: ch.folder_id,
+      created_at: ch.date,
+      updated_at: ch.date,
+      started_epoch: 0,
+      changes: [],
+    };
+    existing.changes.push(ch);
+    if (ch.date && (!existing.updated_at || ch.date > existing.updated_at)) {
+      existing.updated_at = ch.date;
+    }
+    map.set(folderName, existing);
+  }
+
+  return Array.from(map.values()).sort((a, b) =>
+    (b.created_at || b.folder_name).localeCompare(a.created_at || a.folder_name)
+  );
+}
+
 export const RestoreModal: React.FC<RestoreModalProps> = ({
   isOpen,
   onClose,
   onRestored,
 }) => {
-  const { getGroupedBackupList, restoreFromSnapshot, revertChangeSnapshot } = useDriveSync();
+  const { getGroupedBackupList, restoreGroupBackup, restoreFromSnapshot, revertChangeSnapshot } =
+    useDriveSync();
   const { showToast } = useToast();
 
-  const [activeTab, setActiveTab] = useState<'full' | 'changes'>('full');
-  const [fullBackups, setFullBackups] = useState<BackupManifestEntry[]>([]);
-  const [changeHistory, setChangeHistory] = useState<ChangeHistoryEntry[]>([]);
+  const [groups, setGroups] = useState<BackupGroupEntry[]>([]);
+  const [selectedFolderName, setSelectedFolderName] = useState<string | null>(null);
   const [changesSinceFull, setChangesSinceFull] = useState(0);
 
   const [isLoadingList, setIsLoadingList] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
-  const [selectedFull, setSelectedFull] = useState<BackupManifestEntry | null>(null);
-  const [selectedChange, setSelectedChange] = useState<ChangeHistoryEntry | null>(null);
-  const [actingFilename, setActingFilename] = useState<string | null>(null);
+  const [actingKey, setActingKey] = useState<string | null>(null);
 
   const loadGroupedBackups = useCallback(async () => {
     setIsLoadingList(true);
     setListError(null);
-    setSelectedFull(null);
-    setSelectedChange(null);
     try {
       const grouped = await getGroupedBackupList();
-      setFullBackups(Array.isArray(grouped.full_backups) ? grouped.full_backups : []);
-      setChangeHistory(Array.isArray(grouped.change_history) ? grouped.change_history : []);
+      const resolvedGroups = buildFallbackGroups(grouped);
+      setGroups(resolvedGroups);
       setChangesSinceFull(grouped.changes_since_full_backup ?? 0);
+      setSelectedFolderName((prev) => {
+        if (prev && resolvedGroups.some((g) => g.folder_name === prev)) {
+          return prev;
+        }
+        return resolvedGroups[0]?.folder_name ?? null;
+      });
     } catch (err: unknown) {
       const msg =
         typeof err === 'string'
           ? err
           : (err as { message?: string })?.message ||
-            "Could not load backup history from your 'RentFlow Grouped Backups' folder.";
+            "Could not load grouped backup history from your 'RentFlow Grouped Backups' folder.";
       setListError(msg);
     } finally {
       setIsLoadingList(false);
@@ -118,55 +197,61 @@ export const RestoreModal: React.FC<RestoreModalProps> = ({
     if (isOpen) {
       void loadGroupedBackups();
     } else {
-      setSelectedFull(null);
-      setSelectedChange(null);
-      setActingFilename(null);
+      setActingKey(null);
       setListError(null);
     }
   }, [isOpen, loadGroupedBackups]);
 
-  const handleConfirmFullRestore = async (entry: BackupManifestEntry) => {
-    setActingFilename(entry.filename);
+  const selectedGroup =
+    groups.find((g) => g.folder_name === selectedFolderName) ?? groups[0] ?? null;
+
+  const handleRestoreWholeGroup = async (group: BackupGroupEntry) => {
+    setActingKey(`group:${group.folder_name}`);
     setListError(null);
 
     try {
-      const res = await restoreFromSnapshot(entry.filename);
+      const res = group.folder_name
+        ? await restoreGroupBackup(group.folder_name)
+        : await restoreFromSnapshot(group.full_snapshot_filename || '', group.folder_id);
+
       if (res.restored) {
         showToast({
           type: 'success',
-          message: `Restored ${res.totalRecords} records from ${entry.filename}. Reloading RentFlow...`,
+          message: `Restored ${res.totalRecords} records from ${formatGroupTitle(group)}. Reloading RentFlow...`,
         });
         onRestored?.(res);
         onClose();
         window.location.reload();
       } else {
-        setListError(res.message || 'Selected backup did not contain restorable records.');
+        setListError(res.message || 'Selected backup group did not contain restorable records.');
       }
     } catch (err: unknown) {
       const msg =
         typeof err === 'string'
           ? err
-          : (err as { message?: string })?.message || 'Failed to restore from selected backup.';
+          : (err as { message?: string })?.message || 'Failed to restore selected backup group.';
       setListError(msg);
       showToast({ type: 'error', message: msg });
     } finally {
-      setActingFilename(null);
+      setActingKey(null);
     }
   };
 
-  const handleConfirmRevertChange = async (entry: ChangeHistoryEntry) => {
-    setActingFilename(entry.filename);
+  const handleRevertChange = async (change: ChangeHistoryEntry, group: BackupGroupEntry) => {
+    setActingKey(`change:${group.folder_name}:${change.filename}`);
     setListError(null);
 
     try {
-      const res = await revertChangeSnapshot(entry.filename);
+      const res = await revertChangeSnapshot(
+        change.filename,
+        change.folder_id || group.folder_id
+      );
       if (res.restored) {
         showToast({
           type: 'success',
-          message: res.message || `Reverted ${entry.filename}`,
+          message: res.message || `Reverted ${change.filename}`,
         });
         onRestored?.(res);
-        setSelectedChange(null);
         await loadGroupedBackups();
       } else {
         setListError(res.message || 'Could not revert this change snapshot.');
@@ -179,26 +264,38 @@ export const RestoreModal: React.FC<RestoreModalProps> = ({
       setListError(msg);
       showToast({ type: 'error', message: msg });
     } finally {
-      setActingFilename(null);
+      setActingKey(null);
     }
+  };
+
+  const getActionBadgeStyle = (action: string) => {
+    if (action === 'add') {
+      return 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/25';
+    }
+    if (action === 'delete') {
+      return 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/25';
+    }
+    return 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/25';
   };
 
   return (
     <Modal
       isOpen={isOpen}
       onClose={() => {
-        if (!actingFilename) onClose();
+        if (!actingKey) onClose();
       }}
       title="Restore Data"
-      description="Restore an entire full session backup or revert one specific record change from 'RentFlow Grouped Backups'."
-      maxWidth="lg"
+      description="Select an hourly backup group on the left to restore the entire session snapshot or revert an individual change on the right."
+      maxWidth="4xl"
     >
       <div className="space-y-4">
+        {/* Status Header Bar */}
         <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-xl bg-[var(--bg-surface-sunken)] border border-[var(--border-subtle)] text-xs">
           <div className="flex items-center gap-2 text-[var(--text-secondary)]">
             <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
             <span>
-              AES-256-GCM &bull; {changesSinceFull}/10 small changes toward next full backup
+              AES-256-GCM Encrypted &bull; {groups.length} Backup Group{groups.length === 1 ? '' : 's'} &bull;{' '}
+              {changesSinceFull}/10 small changes toward next full snapshot
             </span>
           </div>
           <Button
@@ -206,61 +303,12 @@ export const RestoreModal: React.FC<RestoreModalProps> = ({
             variant="ghost"
             size="sm"
             onClick={() => void loadGroupedBackups()}
-            disabled={isLoadingList || Boolean(actingFilename)}
+            disabled={isLoadingList || Boolean(actingKey)}
             className="gap-1.5 h-7 px-2.5 text-xs shrink-0"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoadingList ? 'animate-spin' : ''}`} />
             <span>Refresh</span>
           </Button>
-        </div>
-
-        {/* Two-Tab Restore Switcher */}
-        <div
-          role="tablist"
-          aria-label="Restore mode"
-          className="grid grid-cols-2 p-1 rounded-xl bg-[var(--bg-surface-sunken)] border border-[var(--border-subtle)] gap-1"
-        >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'full'}
-            onClick={() => {
-              setActiveTab('full');
-              setSelectedChange(null);
-            }}
-            className={`px-3 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center justify-center gap-2 ${
-              activeTab === 'full'
-                ? 'bg-[var(--bg-surface)] text-[var(--text-primary)] shadow-sm border border-[var(--border-subtle)]'
-                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-            }`}
-          >
-            <Database className="w-3.5 h-3.5" />
-            <span>Full Backups</span>
-            <span className="text-[11px] font-mono opacity-70 tabular-nums">
-              ({fullBackups.length})
-            </span>
-          </button>
-
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'changes'}
-            onClick={() => {
-              setActiveTab('changes');
-              setSelectedFull(null);
-            }}
-            className={`px-3 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center justify-center gap-2 ${
-              activeTab === 'changes'
-                ? 'bg-[var(--bg-surface)] text-[var(--text-primary)] shadow-sm border border-[var(--border-subtle)]'
-                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-            }`}
-          >
-            <History className="w-3.5 h-3.5" />
-            <span>Change History</span>
-            <span className="text-[11px] font-mono opacity-70 tabular-nums">
-              ({changeHistory.length})
-            </span>
-          </button>
         </div>
 
         {listError && (
@@ -274,163 +322,226 @@ export const RestoreModal: React.FC<RestoreModalProps> = ({
         )}
 
         {isLoadingList ? (
-          <div className="py-10 flex flex-col items-center justify-center text-center space-y-3">
+          <div className="py-12 flex flex-col items-center justify-center text-center space-y-3">
             <RefreshCw className="w-6 h-6 animate-spin text-[var(--accent)]" />
             <div className="space-y-1">
               <p className="text-sm font-semibold text-[var(--text-primary)]">
                 Loading Google Drive grouped backups...
               </p>
               <p className="text-xs text-[var(--text-secondary)]">
-                Fetching backup history from your RentFlow Grouped Backups folder.
+                Fetching hourly folders and itemized change snapshots from RentFlow Grouped Backups.
               </p>
             </div>
           </div>
-        ) : activeTab === 'full' ? (
-          fullBackups.length === 0 ? (
-            <div className="py-10 px-4 text-center rounded-xl border border-dashed border-[var(--border-strong)] bg-[var(--bg-surface-sunken)] space-y-2">
-              <Cloud className="w-7 h-7 mx-auto text-[var(--text-subtle)]" />
-              <p className="text-sm font-semibold text-[var(--text-primary)]">
-                No Full Backups found yet
-              </p>
-              <p className="text-xs text-[var(--text-secondary)] max-w-sm mx-auto leading-relaxed">
-                Full Backups compile automatically every 24 hours or after 10 small record changes.
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-2.5 max-h-[320px] overflow-y-auto pr-1">
-              {fullBackups.map((entry, idx) => {
-                const summaryLabel = formatSnapshotSummary(entry);
-                const isSelected = selectedFull?.filename === entry.filename;
-                const isActing = actingFilename === entry.filename;
-
-                return (
-                  <button
-                    key={`${entry.filename}-${idx}`}
-                    type="button"
-                    onClick={() => setSelectedFull(entry)}
-                    disabled={Boolean(actingFilename)}
-                    className={`w-full text-left p-3.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-3 ${
-                      isSelected
-                        ? 'border-[var(--accent)] bg-[var(--accent-subtle)]/25 ring-1 ring-[var(--accent)]/40'
-                        : 'border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface-sunken)]'
-                    } ${actingFilename ? 'opacity-70 cursor-not-allowed' : ''}`}
-                  >
-                    <div className="min-w-0 flex-1 space-y-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Calendar className="w-3.5 h-3.5 text-[var(--accent)] shrink-0" />
-                        <span className="text-sm font-semibold text-[var(--text-primary)] tabular-nums">
-                          {summaryLabel}
-                        </span>
-                        {idx === 0 && (
-                          <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
-                            · Latest
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--text-secondary)] tabular-nums">
-                        <span className="font-mono truncate max-w-[290px]">{entry.filename}</span>
-                        {typeof entry.record_count === 'number' && (
-                          <span className="inline-flex items-center gap-1">
-                            <Database className="w-3 h-3" />
-                            <span>{entry.record_count} records</span>
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="shrink-0">
-                      {isActing ? (
-                        <RefreshCw className="w-4 h-4 animate-spin text-[var(--accent)]" />
-                      ) : isSelected ? (
-                        <CheckCircle2 className="w-5 h-5 text-[var(--accent)]" />
-                      ) : (
-                        <Download className="w-4 h-4 text-[var(--text-subtle)]" />
-                      )}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          )
-        ) : changeHistory.length === 0 ? (
-          <div className="py-10 px-4 text-center rounded-xl border border-dashed border-[var(--border-strong)] bg-[var(--bg-surface-sunken)] space-y-2">
-            <History className="w-7 h-7 mx-auto text-[var(--text-subtle)]" />
+        ) : groups.length === 0 ? (
+          <div className="py-12 px-4 text-center rounded-xl border border-dashed border-[var(--border-strong)] bg-[var(--bg-surface-sunken)] space-y-2">
+            <Cloud className="w-8 h-8 mx-auto text-[var(--text-subtle)]" />
             <p className="text-sm font-semibold text-[var(--text-primary)]">
-              No Small Change snapshots yet
+              No Grouped Backups Found Yet
             </p>
-            <p className="text-xs text-[var(--text-secondary)] max-w-sm mx-auto leading-relaxed">
-              Every create, edit, or delete automatically uploads a lightweight encrypted snapshot here (last 20 kept).
+            <p className="text-xs text-[var(--text-secondary)] max-w-md mx-auto leading-relaxed">
+              Changes made while signed in are automatically grouped into hourly folders inside
+              &lsquo;RentFlow Grouped Backups&rsquo;.
             </p>
           </div>
         ) : (
-          <div className="space-y-2.5 max-h-[320px] overflow-y-auto pr-1">
-            {changeHistory.map((entry, idx) => {
-              const summaryLabel = formatChangeSummary(entry);
-              const isSelected = selectedChange?.filename === entry.filename;
-              const isActing = actingFilename === entry.filename;
+          /* Two-Pane Grouped Restore Browser */
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-4 min-h-[380px]">
+            {/* Left Pane: Hourly Grouped Backups */}
+            <div className="md:col-span-5 flex flex-col rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface-sunken)] overflow-hidden">
+              <div className="px-3.5 py-2.5 border-b border-[var(--border-subtle)] flex items-center justify-between bg-[var(--bg-surface)]">
+                <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[var(--text-secondary)]">
+                  <Folder className="w-3.5 h-3.5 text-[var(--accent)]" />
+                  <span>Grouped Backups</span>
+                </div>
+                <span className="text-[11px] font-mono text-[var(--text-subtle)] tabular-nums">
+                  {groups.length}
+                </span>
+              </div>
 
-              return (
-                <button
-                  key={`${entry.filename}-${idx}`}
-                  type="button"
-                  onClick={() => setSelectedChange(entry)}
-                  disabled={Boolean(actingFilename)}
-                  className={`w-full text-left p-3.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-3 ${
-                    isSelected
-                      ? 'border-[var(--accent)] bg-[var(--accent-subtle)]/25 ring-1 ring-[var(--accent)]/40'
-                      : 'border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface-sunken)]'
-                  } ${actingFilename ? 'opacity-70 cursor-not-allowed' : ''}`}
-                >
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <RotateCcw className="w-3.5 h-3.5 text-[var(--accent)] shrink-0" />
-                      <span className="text-sm font-semibold text-[var(--text-primary)] tabular-nums truncate">
-                        {summaryLabel}
-                      </span>
+              <div className="p-2 space-y-1.5 max-h-[360px] overflow-y-auto">
+                {groups.map((group, idx) => {
+                  const isSelected = selectedGroup?.folder_name === group.folder_name;
+                  const changeCount = group.changes?.length ?? 0;
+
+                  return (
+                    <button
+                      key={`${group.folder_name}-${idx}`}
+                      type="button"
+                      onClick={() => setSelectedFolderName(group.folder_name)}
+                      disabled={Boolean(actingKey)}
+                      className={`w-full text-left p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2.5 ${
+                        isSelected
+                          ? 'border-[var(--accent)] bg-[var(--bg-surface)] ring-1 ring-[var(--accent)]/40 shadow-xs'
+                          : 'border-transparent hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface)]/70'
+                      } ${actingKey ? 'opacity-70 cursor-not-allowed' : ''}`}
+                    >
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex items-center gap-1.5">
+                          <Calendar className="w-3.5 h-3.5 text-[var(--accent)] shrink-0" />
+                          <span className="text-xs font-bold text-[var(--text-primary)] truncate">
+                            {formatGroupTitle(group)}
+                          </span>
+                          {idx === 0 && (
+                            <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 shrink-0">
+                              Latest
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[var(--text-secondary)] tabular-nums">
+                          <span className="font-mono truncate max-w-[170px]">{group.folder_name}</span>
+                          <span>
+                            &bull; {changeCount} {changeCount === 1 ? 'change' : 'changes'}
+                          </span>
+                          {typeof group.record_count === 'number' && (
+                            <span>&bull; {group.record_count} recs</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <ChevronRight
+                        className={`w-4 h-4 shrink-0 transition-transform ${
+                          isSelected ? 'text-[var(--accent)] translate-x-0.5' : 'text-[var(--text-subtle)]'
+                        }`}
+                      />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Right Pane: Selected Group Header + Itemized Small Changes */}
+            <div className="md:col-span-7 flex flex-col rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] overflow-hidden">
+              {selectedGroup ? (
+                <>
+                  {/* Selected Group Action Header */}
+                  <div className="p-4 border-b border-[var(--border-subtle)] bg-[var(--bg-surface-sunken)] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex items-center gap-2">
+                        <Database className="w-4 h-4 text-[var(--accent)] shrink-0" />
+                        <h3 className="text-sm font-bold text-[var(--text-primary)] truncate">
+                          {formatGroupTitle(selectedGroup)}
+                        </h3>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] text-[var(--text-secondary)] tabular-nums">
+                        <span className="font-mono">{selectedGroup.folder_name}</span>
+                        {selectedGroup.full_snapshot_size && (
+                          <span>&bull; {selectedGroup.full_snapshot_size}</span>
+                        )}
+                        {typeof selectedGroup.record_count === 'number' && (
+                          <span>&bull; {selectedGroup.record_count} records</span>
+                        )}
+                      </div>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[var(--text-secondary)] tabular-nums">
-                      <span className="font-mono truncate max-w-[290px]">{entry.filename}</span>
-                      <span>· {entry.table}</span>
-                      <span>· {entry.size}</span>
-                    </div>
+                    <Button
+                      type="button"
+                      variant="primary"
+                      size="sm"
+                      disabled={Boolean(actingKey)}
+                      onClick={() => void handleRestoreWholeGroup(selectedGroup)}
+                      className="gap-1.5 shrink-0"
+                    >
+                      {actingKey === `group:${selectedGroup.folder_name}` ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          <span>Restoring Group...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Download className="w-3.5 h-3.5" />
+                          <span>Restore Whole Group</span>
+                        </>
+                      )}
+                    </Button>
                   </div>
 
-                  <div className="shrink-0">
-                    {isActing ? (
-                      <RefreshCw className="w-4 h-4 animate-spin text-[var(--accent)]" />
-                    ) : isSelected ? (
-                      <CheckCircle2 className="w-5 h-5 text-[var(--accent)]" />
+                  {/* Itemized Small Changes inside Selected Group */}
+                  <div className="px-4 py-2.5 border-b border-[var(--border-subtle)] flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
+                    <span className="flex items-center gap-1.5">
+                      <History className="w-3.5 h-3.5 text-[var(--accent)]" />
+                      Itemized Small Changes
+                    </span>
+                    <span className="font-mono tabular-nums text-[var(--text-subtle)]">
+                      {selectedGroup.changes?.length ?? 0} item
+                      {(selectedGroup.changes?.length ?? 0) === 1 ? '' : 's'}
+                    </span>
+                  </div>
+
+                  <div className="p-3 space-y-2 max-h-[300px] overflow-y-auto flex-1">
+                    {!selectedGroup.changes || selectedGroup.changes.length === 0 ? (
+                      <div className="py-10 px-4 text-center text-xs text-[var(--text-secondary)] space-y-1.5">
+                        <History className="w-6 h-6 mx-auto text-[var(--text-subtle)]" />
+                        <p className="font-semibold text-[var(--text-primary)]">
+                          Full Snapshot Group
+                        </p>
+                        <p className="max-w-xs mx-auto leading-relaxed">
+                          This group holds a full portfolio snapshot. Click &ldquo;Restore Whole
+                          Group&rdquo; above to restore all records.
+                        </p>
+                      </div>
                     ) : (
-                      <RotateCcw className="w-4 h-4 text-[var(--text-subtle)]" />
+                      selectedGroup.changes.map((change, idx) => {
+                        const actionKey = `change:${selectedGroup.folder_name}:${change.filename}`;
+                        const isReverting = actingKey === actionKey;
+                        const summaryLabel = formatChangeSummary(change);
+
+                        return (
+                          <div
+                            key={`${change.filename}-${idx}`}
+                            className="p-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface-sunken)]/60 hover:border-[var(--border-strong)] transition-colors flex items-center justify-between gap-3"
+                          >
+                            <div className="min-w-0 flex-1 space-y-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span
+                                  className={`px-1.5 py-0.5 rounded border text-[10px] font-semibold uppercase tracking-wide ${getActionBadgeStyle(
+                                    change.action
+                                  )}`}
+                                >
+                                  {change.action}
+                                </span>
+                                <span className="text-xs font-semibold text-[var(--text-primary)] truncate">
+                                  {summaryLabel}
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[var(--text-secondary)] tabular-nums">
+                                <span className="font-mono truncate max-w-[230px]">
+                                  {change.filename}
+                                </span>
+                                <span>&bull; {change.table.replace(/_/g, ' ')}</span>
+                                <span>&bull; {change.size}</span>
+                              </div>
+                            </div>
+
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={Boolean(actingKey)}
+                              onClick={() => void handleRevertChange(change, selectedGroup)}
+                              className="gap-1.5 h-8 px-2.5 text-xs shrink-0"
+                            >
+                              {isReverting ? (
+                                <>
+                                  <RefreshCw className="w-3 h-3 animate-spin" />
+                                  <span>Reverting...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <RotateCcw className="w-3 h-3" />
+                                  <span>Revert Change</span>
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                        );
+                      })
                     )}
                   </div>
-                </button>
-              );
-            })}
-          </div>
-        )}
-
-        {activeTab === 'full' && selectedFull && (
-          <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/25 text-xs text-amber-800 dark:text-amber-200 space-y-1">
-            <p className="font-semibold">
-              Restore {selectedFull.filename} and reload RentFlow?
-            </p>
-            <p className="text-[11px] opacity-90 leading-relaxed">
-              This downloads and decrypts the full backup, replaces your local portfolio data, and reloads RentFlow.
-            </p>
-          </div>
-        )}
-
-        {activeTab === 'changes' && selectedChange && (
-          <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/25 text-xs text-amber-800 dark:text-amber-200 space-y-1">
-            <p className="font-semibold">
-              Revert only &ldquo;{formatChangeSummary(selectedChange)}&rdquo;?
-            </p>
-            <p className="text-[11px] opacity-90 leading-relaxed">
-              Undoes only this individual change ({selectedChange.table.replace(/_/g, ' ')}) without affecting other records.
-            </p>
+                </>
+              ) : null}
+            </div>
           </div>
         )}
 
@@ -440,61 +551,10 @@ export const RestoreModal: React.FC<RestoreModalProps> = ({
             variant="outline"
             size="sm"
             onClick={onClose}
-            disabled={Boolean(actingFilename)}
+            disabled={Boolean(actingKey)}
           >
-            Cancel
+            Close
           </Button>
-          {activeTab === 'full' ? (
-            <Button
-              type="button"
-              variant="primary"
-              size="sm"
-              disabled={!selectedFull || Boolean(actingFilename)}
-              onClick={() => {
-                if (selectedFull) {
-                  void handleConfirmFullRestore(selectedFull);
-                }
-              }}
-              className="gap-1.5"
-            >
-              {actingFilename ? (
-                <>
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>Restoring Full Backup...</span>
-                </>
-              ) : (
-                <>
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Restore Full Backup</span>
-                </>
-              )}
-            </Button>
-          ) : (
-            <Button
-              type="button"
-              variant="primary"
-              size="sm"
-              disabled={!selectedChange || Boolean(actingFilename)}
-              onClick={() => {
-                if (selectedChange) {
-                  void handleConfirmRevertChange(selectedChange);
-                }
-              }}
-              className="gap-1.5"
-            >
-              {actingFilename ? (
-                <>
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>Reverting Change...</span>
-                </>
-              ) : (
-                <>
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  <span>Revert Only This Change</span>
-                </>
-              )}
-            </Button>
-          )}
         </div>
       </div>
     </Modal>

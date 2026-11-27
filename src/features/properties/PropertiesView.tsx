@@ -176,7 +176,7 @@ export const PropertiesView: React.FC = () => {
     } else {
       const created = db.insertItem<Property>('properties', {
         id: generateUUID(),
-        org_id: 'org_demo_1',
+        org_id: 'default_org',
         name: propName.trim(),
         address_line1: propAddress.trim(),
         address: propAddress.trim(),

@@ -85,7 +85,7 @@ export const VendorsView: React.FC = () => {
     } else {
       db.insertItem<Vendor>('vendors', {
         id: generateUUID(),
-        org_id: 'org_demo_1',
+        org_id: 'default_org',
         name: name.trim(),
         category,
         phone: phone.trim(),

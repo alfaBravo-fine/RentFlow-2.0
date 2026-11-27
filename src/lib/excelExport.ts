@@ -17,6 +17,10 @@ import {
   Vendor,
 } from '../db/schema';
 import { CountryPack } from '../countries/types';
+import { getCountryPack } from '../countries/resolver';
+import { usePackStore } from '../countries/usePack';
+
+export const MASTER_EXCEL_FILENAME = 'RentFlow_Master_Data.xlsx';
 
 export interface ColumnDef {
   header: string;
@@ -634,3 +638,161 @@ export async function updateExistingExcel(
 
 // Alias for backward compatibility
 export const exportAllDataToExcel = exportToExcel;
+
+export interface MasterExcelSyncOptions {
+  pack?: CountryPack;
+  targetFolder?: string;
+  /** When true (e.g. background browser/test calls), avoid triggering browser file download popup */
+  silentDownload?: boolean;
+}
+
+let masterSyncInFlight: Promise<ExportResult> | null = null;
+
+/**
+ * Generates and atomically overwrites `RentFlow_Master_Data.xlsx` with all portfolio tabs.
+ * Styling: Bold `#4F46E5` indigo headers with white text, thin cell borders, currency formatting,
+ * frozen header rows, and auto-adjusted column widths based on the longest cell text.
+ */
+export async function syncMasterExcelFile(
+  optionsOrPack?: MasterExcelSyncOptions | CountryPack,
+  customMasterDir?: string
+): Promise<ExportResult> {
+  const executeSync = async (): Promise<ExportResult> => {
+    const opts: MasterExcelSyncOptions =
+      optionsOrPack && 'code' in optionsOrPack
+        ? { pack: optionsOrPack, targetFolder: customMasterDir }
+        : { ...(optionsOrPack || {}), targetFolder: customMasterDir ?? optionsOrPack?.targetFolder };
+
+    const activePack = opts.pack || getCountryPack(usePackStore.getState().countryCode || 'US');
+    const currencySymbol = activePack?.currency?.symbol || '$';
+    const currencyNumFmt = `"${currencySymbol} "#,##0.00`;
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'RentFlow Property Management';
+    workbook.created = new Date();
+    workbook.modified = new Date();
+
+    const exportData = getExportData(activePack);
+    let totalRecordsCount = 0;
+
+    Object.entries(exportData).forEach(([sheetName, { columns, rows }]) => {
+      const sheet = workbook.addWorksheet(sheetName, {
+        views: [{ state: 'frozen', ySplit: 1, showGridLines: true }],
+      });
+
+      // 1. Row 1: Styled Indigo Header (#4F46E5 fill, white bold text, thin borders)
+      const headerRow = sheet.addRow(columns.map((c) => c.header));
+      headerRow.height = 26;
+      headerRow.eachCell({ includeEmpty: true }, (cell) => {
+        cell.font = { name: 'Calibri', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F46E5' } };
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+          bottom: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+          left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+          right: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        };
+      });
+
+      // 2. Data Rows (Row 2+)
+      rows.forEach((item: Record<string, any>) => {
+        totalRecordsCount++;
+        const rowData = columns.map((col) =>
+          item[col.key] !== undefined && item[col.key] !== null ? item[col.key] : ''
+        );
+        const row = sheet.addRow(rowData);
+        row.height = 20;
+
+        row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+          const colDef = columns[colNumber - 1];
+          cell.font = { name: 'Calibri', size: 10, color: { argb: 'FF0F172A' } };
+          cell.alignment = {
+            vertical: 'middle',
+            horizontal: colDef?.isCurrency || typeof cell.value === 'number' ? 'right' : 'left',
+          };
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'FFD3D3D3' } },
+            bottom: { style: 'thin', color: { argb: 'FFD3D3D3' } },
+            left: { style: 'thin', color: { argb: 'FFD3D3D3' } },
+            right: { style: 'thin', color: { argb: 'FFD3D3D3' } },
+          };
+
+          if (colDef?.isCurrency && typeof cell.value === 'number') {
+            cell.numFmt = currencyNumFmt;
+          }
+        });
+      });
+
+      // 3. Auto-adjust column widths based on longest text
+      sheet.columns.forEach((column, idx) => {
+        let maxLength = columns[idx]?.header?.length || 10;
+        column.eachCell?.({ includeEmpty: true }, (cell) => {
+          const val = cell.value;
+          const str =
+            val === null || val === undefined
+              ? ''
+              : typeof val === 'object' && 'result' in val
+              ? String((val as any).result ?? '')
+              : String(val);
+          if (str.length > maxLength) maxLength = str.length;
+        });
+        column.width = Math.max(12, Math.min(maxLength + 4, 60));
+      });
+    });
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const isTauriDesktop =
+      typeof window !== 'undefined' && Boolean((window as any).__TAURI_INTERNALS__);
+
+    let savedPath: string | undefined;
+    const settingsState = useAppSettingsStore.getState();
+    const configuredDir = (
+      opts.targetFolder ||
+      settingsState.masterExcelFolder ||
+      ''
+    ).trim();
+
+    if (isTauriDesktop) {
+      let targetDir = configuredDir || settingsState.exportDestination?.trim() || '';
+      if (!targetDir) {
+        targetDir = await tauriGetDataPath().catch(() => '');
+      }
+      if (targetDir) {
+        await mkdir(targetDir, { recursive: true });
+        const fullPath = await join(targetDir, MASTER_EXCEL_FILENAME);
+        const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+        await writeFile(fullPath, bytes);
+        savedPath = fullPath;
+      }
+    } else if (!opts.silentDownload && typeof window !== 'undefined') {
+      const blob = new Blob([buffer as BlobPart], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      saveAs(blob, MASTER_EXCEL_FILENAME);
+    }
+
+    settingsState.setLastMasterExcelSync(new Date().toISOString());
+
+    return {
+      fileName: MASTER_EXCEL_FILENAME,
+      savedPath,
+      totalRecords: totalRecordsCount,
+      sheetCount: workbook.worksheets.length,
+      workbook,
+    };
+  };
+
+  if (masterSyncInFlight) {
+    await masterSyncInFlight.catch(() => {});
+  }
+  const current = executeSync();
+  masterSyncInFlight = current;
+  try {
+    return await current;
+  } finally {
+    if (masterSyncInFlight === current) {
+      masterSyncInFlight = null;
+    }
+  }
+}

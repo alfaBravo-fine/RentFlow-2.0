@@ -1,12 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
 import { TopNavTabs } from './TopNavTabs';
 import { CommandPalette } from './CommandPalette';
-import { db } from '../../db/client';
-import { Lease, MaintenanceRequest } from '../../db/schema';
+import { databaseService } from '../../db/DatabaseService';
+import { Property, Unit, Lease, MaintenanceRequest } from '../../db/schema';
 import { ChevronRight, X } from '../icons';
 import { useTheme } from '../theme/ThemeProvider';
 import { useUIStore } from '../../stores/uiStore';
@@ -19,18 +19,48 @@ export interface LayoutProps {
 export const Layout: React.FC<LayoutProps> = ({ children }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { isDarkMode, toggleTheme, isGlassTheme } = useTheme();
+  const { isDarkMode, toggleTheme } = useTheme();
   const { uiLayout } = useUIStore();
   useAppTour(true);
 
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isBannerDismissed, setIsBannerDismissed] = useState(false);
   const [isGlobalCommandOpen, setIsGlobalCommandOpen] = useState(false);
+  const [urgentState, setUrgentState] = useState<{
+    properties: Property[];
+    units: Unit[];
+    leases: Lease[];
+    maintenance: MaintenanceRequest[];
+  }>({
+    properties: [],
+    units: [],
+    leases: [],
+    maintenance: [],
+  });
 
   // Keep Settings layout shell mounted while sub-routes animate independently inside SettingsView
   const pageTransitionKey = location.pathname.startsWith('/settings')
     ? '/settings'
     : location.pathname;
+
+  const loadUrgentData = useCallback(async () => {
+    await databaseService.initialize();
+    const [properties, units, leases, maintenance] = await Promise.all([
+      databaseService.getProperties(),
+      databaseService.getUnits(),
+      databaseService.getLeases(),
+      databaseService.getMaintenanceRequests(),
+    ]);
+    setUrgentState({ properties, units, leases, maintenance });
+  }, []);
+
+  useEffect(() => {
+    const refresh = () => {
+      void loadUrgentData().catch(() => {});
+    };
+    refresh();
+    return databaseService.onWrite(refresh);
+  }, [loadUrgentData]);
 
   // Global Cmd+K / Ctrl+K keyboard shortcut listener
   useEffect(() => {
@@ -44,16 +74,28 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Check for critical items (e.g. leases expiring within 30 days or emergency maintenance)
-  const leases = db.getTable<Lease>('leases');
-  const maintenance = db.getTable<MaintenanceRequest>('maintenance_requests');
+  // Check for critical items with strict cascading active-entity checks
+  const activePropertyIds = new Set(
+    urgentState.properties.filter((p) => !p.deleted_at && !(p as any).deletedAt).map((p) => p.id)
+  );
+  const activeUnitIds = new Set(
+    urgentState.units
+      .filter((u) => !u.deleted_at && !(u as any).deletedAt && activePropertyIds.has(u.property_id))
+      .map((u) => u.id)
+  );
+  const leases = urgentState.leases.filter(
+    (l) => !l.deleted_at && !(l as any).deletedAt && activeUnitIds.has(l.unit_id)
+  );
+  const maintenance = urgentState.maintenance.filter(
+    (m) => !m.deleted_at && !(m as any).deletedAt && (!m.unit_id || activeUnitIds.has(m.unit_id))
+  );
   const now = Date.now();
   const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
 
   const urgentExpiring = leases.filter((l) => {
-    if (l.status === 'expired' || l.status === 'terminated') return false;
+    if (l.status === 'expired' || l.status === 'terminated' || !l.end_date) return false;
     const endMs = new Date(l.end_date).getTime();
-    return endMs - now <= thirtyDaysMs;
+    return !Number.isNaN(endMs) && endMs - now <= thirtyDaysMs;
   });
 
   const emergencyMaintenance = maintenance.filter(
@@ -62,8 +104,8 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
 
   const hasUrgentAlert = !isBannerDismissed && (urgentExpiring.length > 0 || emergencyMaintenance.length > 0);
 
-  const renderPageContent = () => (
-    <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-8 w-full max-w-full">
+  const renderPageContent = (extraClass = '') => (
+    <main className={`flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-4 sm:p-8 w-full max-w-full ${extraClass}`}>
       <div className="max-w-[1400px] mx-auto w-full max-w-full overflow-x-hidden">
         <AnimatePresence mode="wait" initial={false}>
           <motion.div
@@ -108,17 +150,15 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
       </div>
     ) : null;
 
-  const shellBackgroundClass = isGlassTheme
-    ? 'bg-transparent text-[var(--text-primary)]'
-    : 'bg-[var(--bg-base)] text-[var(--text-primary)]';
+  const shellBackgroundClass = 'bg-transparent text-[var(--text-primary)]';
 
   // --- TOP-TABS LAYOUT MODE ---
   if (uiLayout === 'top-tabs') {
     return (
-      <div className={`flex flex-col h-full w-full flex-1 min-h-0 overflow-hidden ${shellBackgroundClass}`}>
+      <div className={`flex flex-col h-screen w-full flex-1 min-h-0 overflow-hidden ${shellBackgroundClass}`}>
         <TopNavTabs />
         {renderUrgentBanner()}
-        {renderPageContent()}
+        {renderPageContent('top-tabs-main')}
         <CommandPalette isOpen={isGlobalCommandOpen} onClose={() => setIsGlobalCommandOpen(false)} />
       </div>
     );

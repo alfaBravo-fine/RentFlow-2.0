@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { db } from '../../db/client';
+import { databaseService } from '../../db/DatabaseService';
+import { MonthlyFinanceSqlRow, tauriGetMonthlyIncomeVsExpenses } from '../../lib/tauri/bridge';
 import { Property, Unit, Lease, Invoice, MaintenanceRequest, Tenant, DocumentVaultItem, Payment, Expense } from '../../db/schema';
 import { usePack } from '../../countries/usePack';
-import { formatMoney } from '../../lib/money';
+import { formatMoney, minorToMajorNumber } from '../../lib/money';
 import { Card, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
@@ -37,12 +38,90 @@ import {
   Legend,
 } from 'recharts';
 
+interface DashboardSnapshot {
+  properties: Property[];
+  units: Unit[];
+  leases: Lease[];
+  invoices: Invoice[];
+  payments: Payment[];
+  expenses: Expense[];
+  maintenance: MaintenanceRequest[];
+  tenants: Tenant[];
+  documents: DocumentVaultItem[];
+}
+
+const EMPTY_DASHBOARD_SNAPSHOT: DashboardSnapshot = {
+  properties: [],
+  units: [],
+  leases: [],
+  invoices: [],
+  payments: [],
+  expenses: [],
+  maintenance: [],
+  tenants: [],
+  documents: [],
+};
+
+function matchesCalendarMonth(
+  dateStr: string | null | undefined,
+  year: number,
+  monthIndex: number,
+  keyPrefix: string
+): boolean {
+  if (!dateStr) return false;
+  if (dateStr.startsWith(keyPrefix)) return true;
+  const parsed = new Date(dateStr);
+  if (Number.isNaN(parsed.getTime())) return false;
+  return parsed.getFullYear() === year && parsed.getMonth() === monthIndex;
+}
+
 export const DashboardView: React.FC = () => {
   const navigate = useNavigate();
   const pack = usePack();
   const { showToast } = useToast();
-  const [, setRevision] = useState(0);
+  const [snapshot, setSnapshot] = useState<DashboardSnapshot>(EMPTY_DASHBOARD_SNAPSHOT);
+  const [sqlMonthlyFinance, setSqlMonthlyFinance] = useState<MonthlyFinanceSqlRow[] | null>(null);
   const [isExportingExcel, setIsExportingExcel] = useState(false);
+
+  const loadDashboardData = useCallback(async () => {
+    await databaseService.initialize();
+    const [
+      propertiesRaw,
+      unitsRaw,
+      leasesRaw,
+      invoicesRaw,
+      paymentsRaw,
+      expensesRaw,
+      maintenanceRaw,
+      tenantsRaw,
+      documentsRaw,
+      sqlMonthlyRows,
+    ] = await Promise.all([
+      databaseService.getProperties(),
+      databaseService.getUnits(),
+      databaseService.getLeases(),
+      databaseService.getInvoices(),
+      databaseService.getPayments(),
+      databaseService.getExpenses(),
+      databaseService.getMaintenanceRequests(),
+      databaseService.getTenants(),
+      databaseService.getTable<DocumentVaultItem>('documents'),
+      tauriGetMonthlyIncomeVsExpenses(6).catch(() => null),
+    ]);
+
+    setSnapshot({
+      properties: propertiesRaw,
+      units: unitsRaw,
+      leases: leasesRaw,
+      invoices: invoicesRaw,
+      payments: paymentsRaw,
+      expenses: expensesRaw,
+      maintenance: maintenanceRaw,
+      tenants: tenantsRaw,
+      documents: documentsRaw,
+    });
+    setSqlMonthlyFinance(Array.isArray(sqlMonthlyRows) ? sqlMonthlyRows : null);
+  }, []);
 
   const handleExportExcel = async () => {
     setIsExportingExcel(true);
@@ -67,51 +146,64 @@ export const DashboardView: React.FC = () => {
     }
   };
 
-  // Subscribe to reactive DB writes so Dashboard updates instantly
+  // Query SQLite on mount and refresh whenever database writes occur
   useEffect(() => {
-    const unsubscribe = db.onWrite(() => {
-      setRevision((r) => r + 1);
-    });
-    return unsubscribe;
-  }, []);
+    let active = true;
+    const refresh = () => {
+      void loadDashboardData().catch((err) => {
+        if (active) {
+          console.error('Failed to load dashboard data:', err);
+        }
+      });
+    };
+
+    refresh();
+    const unsubscribe = databaseService.onWrite(refresh);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [loadDashboardData]);
 
   // Strict cascading queries filtering out deleted records
-  const properties = db.getTable<Property>('properties').filter((p) => !p.deleted_at && !(p as any).deletedAt);
-  const deletedPropertyIds = new Set(
-    db
-      .getRawTable<Property>('properties')
-      .filter((p) => Boolean(p.deleted_at || (p as any).deletedAt))
-      .map((p) => p.id)
-  );
+  const properties = snapshot.properties.filter((p) => !p.deleted_at && !(p as any).deletedAt);
+  const activePropertyIds = new Set(properties.map((p) => p.id));
 
-  // Units where deletedAt == null (and not linked to a soft-deleted property)
-  const units = db.getTable<Unit>('units').filter(
-    (u) => !u.deleted_at && !(u as any).deletedAt && !deletedPropertyIds.has(u.property_id)
+  // Units where deletedAt == null (and linked to an active property)
+  const units = snapshot.units.filter(
+    (u) => !u.deleted_at && !(u as any).deletedAt && activePropertyIds.has(u.property_id)
   );
   const unitIds = new Set(units.map((u) => u.id));
 
   // Leases MUST belong to a non-deleted unit and have deleted_at === null
-  const leases = db.getTable<Lease>('leases').filter(
+  const leases = snapshot.leases.filter(
     (l) => !l.deleted_at && !(l as any).deletedAt && unitIds.has(l.unit_id)
   );
   const leaseIds = new Set(leases.map((l) => l.id));
 
   // Invoices MUST belong to a non-deleted lease and have deleted_at === null
-  const invoices = db.getTable<Invoice>('invoices').filter(
+  const invoices = snapshot.invoices.filter(
     (i) => !i.deleted_at && !(i as any).deletedAt && leaseIds.has(i.lease_id)
   );
   const invoiceIds = new Set(invoices.map((i) => i.id));
+  const voidedInvoiceIds = new Set(invoices.filter((i) => i.status === 'voided').map((i) => i.id));
 
-  // Payments MUST belong to a non-deleted invoice and have deleted_at === null
-  const payments = db.getTable<Payment>('payments').filter(
-    (p) => !p.deleted_at && !(p as any).deletedAt && (p.invoice_id === 'unallocated' || invoiceIds.has(p.invoice_id))
+  // Payments MUST belong to a non-deleted, non-voided invoice (or be unallocated) and have deleted_at === null
+  const payments = snapshot.payments.filter(
+    (p) =>
+      !p.deleted_at &&
+      !(p as any).deletedAt &&
+      !voidedInvoiceIds.has(p.invoice_id) &&
+      (p.invoice_id === 'unallocated' || invoiceIds.has(p.invoice_id))
   );
+  const paidInvoiceIdsWithPaymentRows = new Set(payments.map((p) => p.invoice_id));
 
-  const maintenance = db.getTable<MaintenanceRequest>('maintenance_requests').filter(
+  const maintenance = snapshot.maintenance.filter(
     (m) => !m.deleted_at && !(m as any).deletedAt && (!m.unit_id || unitIds.has(m.unit_id))
   );
-  const tenants = db.getTable<Tenant>('tenants').filter((t) => !t.deleted_at && !(t as any).deletedAt);
-  const documents = db.getTable<DocumentVaultItem>('documents').filter((d) => !d.deleted_at && !(d as any).deletedAt);
+  const tenants = snapshot.tenants.filter((t) => !t.deleted_at && !(t as any).deletedAt);
+  const documents = snapshot.documents.filter((d) => !d.deleted_at && !(d as any).deletedAt);
+  const expenses = snapshot.expenses.filter((e) => !e.deleted_at && !(e as any).deletedAt);
 
   // Leases with active status
   const activeLeaseUnitIds = new Set(leases.filter((l) => l.status === 'active').map((l) => l.unit_id));
@@ -125,27 +217,36 @@ export const DashboardView: React.FC = () => {
   const vacantUnits = Math.max(0, totalUnits - occupiedUnits);
   const occupancyRate = totalUnits === 0 ? 0 : Math.round((occupiedUnits / totalUnits) * 100);
 
-  const expectedRentMinor = units.reduce((acc, u) => acc + (isUnitOccupied(u) ? u.rent_minor : 0), 0);
+  const expectedRentMinor = units.reduce((acc, u) => acc + (isUnitOccupied(u) ? (u.rent_minor || 0) : 0), 0);
 
-  // Fix 4: Collected (MTD) sums all payments recorded in current month
+  // Collected (MTD): strictly sums payments recorded in the current calendar month
+  // plus any current-month non-voided invoices marked paid without a linked Payment record
   const now = new Date();
   const currentYear = now.getFullYear();
   const currentMonth = now.getMonth();
+  const currentMonthPrefix = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}`;
 
-  const mtdPayments = payments.filter((p) => {
-    if (!p.paid_at) return false;
-    const pDate = new Date(p.paid_at);
-    return pDate.getFullYear() === currentYear && pDate.getMonth() === currentMonth;
-  });
+  const mtdPaymentsMinor = payments
+    .filter((p) => matchesCalendarMonth(p.paid_at, currentYear, currentMonth, currentMonthPrefix))
+    .reduce((acc, p) => acc + (p.amount_minor || 0), 0);
 
-  const collectedMtdMinor = mtdPayments.length > 0
-    ? mtdPayments.reduce((acc, p) => acc + (p.amount_minor || 0), 0)
-    : invoices.reduce((acc, i) => acc + (i.amount_paid_minor || 0), 0);
+  const mtdDirectInvoicesMinor = invoices
+    .filter(
+      (i) =>
+        i.status !== 'voided' &&
+        (i.amount_paid_minor || 0) > 0 &&
+        !paidInvoiceIdsWithPaymentRows.has(i.id) &&
+        (matchesCalendarMonth(i.period_start, currentYear, currentMonth, currentMonthPrefix) ||
+          matchesCalendarMonth(i.due_date, currentYear, currentMonth, currentMonthPrefix))
+    )
+    .reduce((acc, i) => acc + (i.amount_paid_minor || 0), 0);
 
-  // Fix 4: Pending Rent sums (total - amountPaid) for all invoices where status !== 'paid' && status !== 'voided'
+  const collectedMtdMinor = mtdPaymentsMinor + mtdDirectInvoicesMinor;
+
+  // Pending Rent sums (total - amountPaid) for all active invoices where status !== 'paid' && status !== 'voided'
   const activeUnpaidInvoices = invoices.filter((i) => i.status !== 'paid' && i.status !== 'voided');
   const pendingRentMinor = activeUnpaidInvoices.reduce(
-    (acc, i) => acc + Math.max(0, i.total_minor - i.amount_paid_minor),
+    (acc, i) => acc + Math.max(0, (i.total_minor || 0) - (i.amount_paid_minor || 0)),
     0
   );
 
@@ -154,7 +255,7 @@ export const DashboardView: React.FC = () => {
   );
 
   const overdueRentMinor = overdueInvoices.reduce(
-    (acc, i) => acc + Math.max(0, i.total_minor - i.amount_paid_minor),
+    (acc, i) => acc + Math.max(0, (i.total_minor || 0) - (i.amount_paid_minor || 0)),
     0
   );
 
@@ -177,7 +278,7 @@ export const DashboardView: React.FC = () => {
       const daysLeft = Math.ceil(diffMs / dayMs);
       return { lease: l, daysLeft };
     })
-    .filter((item) => item.daysLeft <= 90)
+    .filter((item) => !Number.isNaN(item.daysLeft) && item.daysLeft <= 90)
     .sort((a, b) => a.daysLeft - b.daysLeft);
 
   const expiring30 = expiringLeasesWithDays.filter((i) => i.daysLeft <= 30);
@@ -189,11 +290,9 @@ export const DashboardView: React.FC = () => {
     if (!doc.expiry_date) return false;
     const diffMs = new Date(doc.expiry_date).getTime() - nowMs;
     const daysLeft = Math.ceil(diffMs / dayMs);
-    return daysLeft <= 30;
+    return !Number.isNaN(daysLeft) && daysLeft <= 30;
   });
 
-  const expenses = db.getTable<Expense>('expenses').filter((e) => !e.deleted_at && !(e as any).deletedAt);
-  const divisor = Math.pow(10, pack.currency.minorUnits);
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
   // Past 6 calendar months
@@ -212,36 +311,56 @@ export const DashboardView: React.FC = () => {
     };
   });
 
-  // Recharts Monthly Income vs. Operating Expenses (past 6 months)
-  const monthlyFinanceData = totalUnits === 0 ? [] : past6Months.map((m) => {
-    const mPayments = payments.filter((p) => {
-      if (!p.paid_at) return false;
-      const pDate = new Date(p.paid_at);
-      return pDate.getFullYear() === m.year && pDate.getMonth() === m.mIndex;
-    });
-    const mPaidInvoices = invoices.filter((i) => i.period_start?.startsWith(m.keyPrefix) || i.due_date?.startsWith(m.keyPrefix));
-    const incMinor = mPayments.length > 0
-      ? mPayments.reduce((acc, p) => acc + (p.amount_minor || 0), 0)
-      : mPaidInvoices.reduce((acc, i) => acc + (i.amount_paid_minor || 0), 0);
+  // Recharts Monthly Income vs. Operating Expenses (past 6 months) — SQL GROUP BY query with 0 fallback
+  const monthlyFinanceData =
+    sqlMonthlyFinance && sqlMonthlyFinance.length > 0
+      ? sqlMonthlyFinance.map((row) => {
+          const monthIdx = Math.max(0, Math.min(11, Number(row.month_key.slice(5, 7)) - 1));
+          const incomeMajor = minorToMajorNumber(row.income_minor || 0, pack);
+          const expenseMajor = minorToMajorNumber(row.expense_minor || 0, pack);
+          return {
+            month: monthNames[monthIdx] || row.month_key,
+            Income: incomeMajor,
+            Expenses: expenseMajor,
+            Net: incomeMajor - expenseMajor,
+          };
+        })
+      : past6Months.map((m) => {
+          const mPaymentsMinor = payments
+            .filter((p) => matchesCalendarMonth(p.paid_at, m.year, m.mIndex, m.keyPrefix))
+            .reduce((acc, p) => acc + (p.amount_minor || 0), 0);
 
-    const mExpenses = expenses.filter((e) => e.expense_date?.startsWith(m.keyPrefix));
-    const expMinor = mExpenses.reduce((acc, e) => acc + (e.amount_minor || 0), 0);
+          const mInvoicesMinor = invoices
+            .filter(
+              (i) =>
+                i.status !== 'voided' &&
+                (i.amount_paid_minor || 0) > 0 &&
+                !paidInvoiceIdsWithPaymentRows.has(i.id) &&
+                (matchesCalendarMonth(i.period_start, m.year, m.mIndex, m.keyPrefix) ||
+                  matchesCalendarMonth(i.due_date, m.year, m.mIndex, m.keyPrefix))
+            )
+            .reduce((acc, i) => acc + (i.amount_paid_minor || 0), 0);
 
-    const incomeMajor = Math.round(incMinor / divisor);
-    const expenseMajor = Math.round(expMinor / divisor);
-    const baselineIncome = Math.round((expectedRentMinor / divisor) * 0.95);
-    const baselineExpense = Math.round((expectedRentMinor / divisor) * 0.18);
+          const incMinor = mPaymentsMinor + mInvoicesMinor;
 
-    const finalIncome = incomeMajor > 0 ? incomeMajor : baselineIncome;
-    const finalExpense = expenseMajor > 0 ? expenseMajor : baselineExpense;
+          const expMinor = expenses
+            .filter((e) => matchesCalendarMonth(e.expense_date, m.year, m.mIndex, m.keyPrefix))
+            .reduce((acc, e) => acc + (e.amount_minor || 0), 0);
 
-    return {
-      month: m.label,
-      Income: finalIncome,
-      Expenses: finalExpense,
-      Net: finalIncome - finalExpense,
-    };
-  });
+          const incomeMajor = minorToMajorNumber(incMinor, pack);
+          const expenseMajor = minorToMajorNumber(expMinor, pack);
+
+          return {
+            month: m.label,
+            Income: incomeMajor,
+            Expenses: expenseMajor,
+            Net: incomeMajor - expenseMajor,
+          };
+        });
+
+  const hasMonthlyFinanceData = monthlyFinanceData.some(
+    (m) => m.Income > 0 || m.Expenses > 0
+  );
 
   // Recharts Property Occupancy Trends / Comparisons
   const propertyOccupancyData = totalUnits === 0 ? [] : properties.map((p) => {
@@ -498,7 +617,21 @@ export const DashboardView: React.FC = () => {
           </div>
           <div className="flex items-center justify-between text-xs text-[var(--text-secondary)] pt-2 border-t border-[var(--border-subtle)]">
             <span>Target: {formatMoney(expectedRentMinor, pack)}</span>
-            <Badge variant="success">Settled</Badge>
+            <Badge
+              variant={
+                expectedRentMinor > 0 && collectedMtdMinor >= expectedRentMinor
+                  ? 'success'
+                  : collectedMtdMinor > 0
+                  ? 'neutral'
+                  : 'neutral'
+              }
+            >
+              {expectedRentMinor > 0 && collectedMtdMinor >= expectedRentMinor
+                ? 'On Target'
+                : collectedMtdMinor > 0
+                ? 'Active'
+                : 'No Inflows'}
+            </Badge>
           </div>
         </Card>
       </div>
@@ -515,34 +648,38 @@ export const DashboardView: React.FC = () => {
               </p>
             </div>
           </CardHeader>
-          <div className="h-64 w-full flex items-center justify-center">
-            {monthlyFinanceData.length === 0 || totalUnits === 0 ? (
-              <div className="text-center p-8 text-xs text-[var(--text-secondary)]">
-                <Receipt className="w-8 h-8 mx-auto mb-2 opacity-40 text-[var(--accent)]" />
-                <p className="font-medium text-[var(--text-primary)]">No Financial Records Available</p>
-                <p className="mt-1">Add properties, leases, and expenses to visualize cashflow comparisons.</p>
+          <div className="h-64 w-full relative flex items-center justify-center">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={monthlyFinanceData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                <XAxis dataKey="month" stroke="var(--text-secondary)" fontSize={12} tickLine={false} />
+                <YAxis
+                  stroke="var(--text-secondary)"
+                  fontSize={12}
+                  tickLine={false}
+                  domain={hasMonthlyFinanceData ? [0, 'auto'] : [0, 100]}
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: 'var(--bg-surface)',
+                    borderColor: 'var(--border-strong)',
+                    borderRadius: '12px',
+                    color: 'var(--text-primary)',
+                    fontSize: '12px',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+                  }}
+                  formatter={(val: any) => [`${pack.currency.symbol} ${Number(val).toLocaleString()}`, '']}
+                />
+                <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '8px' }} />
+                <Bar dataKey="Income" name={`Rental Income (${pack.currency.symbol})`} fill="#10B981" radius={[6, 6, 0, 0]} />
+                <Bar dataKey="Expenses" name={`Expenses (${pack.currency.symbol})`} fill="#EF4444" radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+            {!hasMonthlyFinanceData && (
+              <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center bg-[var(--bg-surface)]/75 backdrop-blur-xs rounded-xl text-center p-6 text-xs text-[var(--text-secondary)]">
+                <Receipt className="w-7 h-7 mb-2 opacity-40 text-[var(--accent)]" />
+                <p className="font-semibold text-[var(--text-primary)]">No data available</p>
+                <p className="mt-1">Record paid invoices or operating expenses to visualize monthly cashflow.</p>
               </div>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={monthlyFinanceData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                  <XAxis dataKey="month" stroke="var(--text-secondary)" fontSize={12} tickLine={false} />
-                  <YAxis stroke="var(--text-secondary)" fontSize={12} tickLine={false} />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: 'var(--bg-surface)',
-                      borderColor: 'var(--border-strong)',
-                      borderRadius: '12px',
-                      color: 'var(--text-primary)',
-                      fontSize: '12px',
-                      boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
-                    }}
-                    formatter={(val: any) => [`${pack.currency.symbol} ${Number(val).toLocaleString()}`, '']}
-                  />
-                  <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '8px' }} />
-                  <Bar dataKey="Income" name={`Rental Income (${pack.currency.symbol})`} fill="#10B981" radius={[6, 6, 0, 0]} />
-                  <Bar dataKey="Expenses" name={`Expenses (${pack.currency.symbol})`} fill="#EF4444" radius={[6, 6, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
             )}
           </div>
         </Card>

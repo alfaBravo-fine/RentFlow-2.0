@@ -2,6 +2,9 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   formatChangeSnapshotFilename,
   formatFullBackupFilename,
+  formatGroupFolderName,
+  formatGroupChangeFilename,
+  isWithinGroupHourWindow,
   shouldTriggerFullBackup,
   GROUPED_BACKUPS_FOLDER_NAME,
   MAX_CHANGE_HISTORY_RETENTION,
@@ -32,6 +35,23 @@ describe('Smart Grouped Sync', () => {
     expect(formatChangeSnapshotFilename('property', 'delete', sampleDate)).toBe(
       'property_delete_2026-11-24_1430.enc'
     );
+  });
+
+  it('formats hourly group folder names (Backup_YYYY-MM-DD_HH-mm) and itemized filenames', () => {
+    const sampleDate = new Date(Date.UTC(2026, 10, 24, 14, 30, 0));
+    expect(formatGroupFolderName(sampleDate)).toBe('Backup_2026-11-24_14-30');
+    expect(formatGroupChangeFilename('tenant', 'add', sampleDate)).toBe('tenant_add_14-30.enc');
+    expect(
+      formatGroupChangeFilename('property', 'edit', new Date(Date.UTC(2026, 10, 24, 14, 45, 0)))
+    ).toBe('property_edit_14-45.enc');
+  });
+
+  it('groups changes within a 1-hour window and rolls over after 60 minutes', () => {
+    const startMs = Date.UTC(2026, 10, 24, 14, 0, 0);
+    expect(isWithinGroupHourWindow(startMs, startMs + 30 * 60 * 1000)).toBe(true);
+    expect(isWithinGroupHourWindow(startMs, startMs + 59 * 60 * 1000)).toBe(true);
+    expect(isWithinGroupHourWindow(startMs, startMs + 60 * 60 * 1000)).toBe(false);
+    expect(isWithinGroupHourWindow(0, startMs)).toBe(false);
   });
 
   it('formats full session backup filename matching FULL_BACKUP_YYYY-MM-DD.enc', () => {

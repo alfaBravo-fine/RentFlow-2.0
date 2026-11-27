@@ -209,6 +209,16 @@ export async function tauriUpdateExpense(id: string, expense: any): Promise<any>
   return invokeTauri<any>('update_expense', { id, expense });
 }
 
+export interface MonthlyFinanceSqlRow {
+  month_key: string;
+  income_minor: number;
+  expense_minor: number;
+}
+
+export async function tauriGetMonthlyIncomeVsExpenses(months = 6): Promise<MonthlyFinanceSqlRow[]> {
+  return invokeTauri<MonthlyFinanceSqlRow[]>('get_monthly_income_vs_expenses', { months });
+}
+
 export async function tauriDeleteExpense(id: string): Promise<void> {
   return invokeTauri<void>('delete_expense', { id });
 }
@@ -335,6 +345,8 @@ export interface BackupManifestEntry {
   size_bytes?: number;
   file_id?: string;
   record_count?: number;
+  folder_name?: string;
+  folder_id?: string;
 }
 
 export interface ChangeHistoryEntry {
@@ -348,11 +360,27 @@ export interface ChangeHistoryEntry {
   size: string;
   size_bytes?: number;
   file_id?: string;
+  folder_name?: string;
+  folder_id?: string;
+}
+
+export interface BackupGroupEntry {
+  folder_name: string;
+  folder_id?: string;
+  created_at: string;
+  updated_at: string;
+  started_epoch: number;
+  full_snapshot_filename?: string;
+  full_snapshot_file_id?: string;
+  full_snapshot_size?: string;
+  record_count?: number;
+  changes: ChangeHistoryEntry[];
 }
 
 export interface GroupedBackupList {
   full_backups: BackupManifestEntry[];
   change_history: ChangeHistoryEntry[];
+  groups: BackupGroupEntry[];
   changes_since_full_backup: number;
   last_full_backup_at?: string | null;
 }
@@ -412,12 +440,28 @@ export async function tauriGetGroupedBackupList(): Promise<GroupedBackupList> {
   return invokeTauri<GroupedBackupList>('get_grouped_backup_list');
 }
 
-export async function tauriRestoreFromSnapshot(filename: string): Promise<TauriPullResult> {
-  return invokeTauri<TauriPullResult>('restore_from_snapshot', { filename });
+export async function tauriRestoreFromSnapshot(
+  filename: string,
+  folderId?: string
+): Promise<TauriPullResult> {
+  return invokeTauri<TauriPullResult>('restore_from_snapshot', {
+    filename,
+    ...(folderId ? { folderId } : {}),
+  });
 }
 
-export async function tauriRevertChangeSnapshot(filename: string): Promise<TauriPullResult> {
-  return invokeTauri<TauriPullResult>('revert_change_snapshot', { filename });
+export async function tauriRestoreGroupBackup(folderName: string): Promise<TauriPullResult> {
+  return invokeTauri<TauriPullResult>('restore_group_backup', { folderName });
+}
+
+export async function tauriRevertChangeSnapshot(
+  filename: string,
+  folderId?: string
+): Promise<TauriPullResult> {
+  return invokeTauri<TauriPullResult>('revert_change_snapshot', {
+    filename,
+    ...(folderId ? { folderId } : {}),
+  });
 }
 
 // --- Desktop Autostart (tauri-plugin-autostart) ---

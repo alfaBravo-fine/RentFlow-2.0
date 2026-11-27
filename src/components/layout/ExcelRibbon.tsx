@@ -82,7 +82,7 @@ export const ExcelRibbon: React.FC = () => {
   };
 
   return (
-    <header className="no-print bg-[var(--bg-surface)] border-b border-[var(--border-strong)] shrink-0 select-none shadow-xs">
+    <header className="top-nav-sticky sticky top-0 z-50 no-print bg-[var(--bg-surface)] border-b border-[var(--border-strong)] shrink-0 select-none shadow-xs">
       {/* Top Application Bar with Excel Branding & Tabs */}
       <div className="flex items-center justify-between px-3 h-10 border-b border-[var(--border-subtle)] bg-[var(--bg-surface-raised)]">
         <div className="flex items-center gap-3 overflow-x-auto scrollbar-none">

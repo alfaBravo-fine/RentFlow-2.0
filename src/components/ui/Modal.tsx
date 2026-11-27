@@ -47,13 +47,13 @@ export const Modal: React.FC<ModalProps> = ({
     <div className="rentflow-modal-root fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 sm:p-6 overflow-y-auto">
       {/* Backdrop */}
       <div
-        className="rentflow-modal-backdrop fixed inset-0 bg-black/40 backdrop-blur-sm transition-opacity animate-in fade-in duration-200"
+        className="rentflow-modal-backdrop menu-backdrop-blur transition-opacity animate-in fade-in duration-200"
         onClick={onClose}
       />
 
       {/* Modal Dialog */}
       <div
-        className={`relative w-full ${maxWidthClasses[maxWidth]} h-full sm:h-auto max-h-[94vh] flex flex-col bg-[var(--bg-surface)] border-0 sm:border border-[var(--border-strong)] rounded-none sm:rounded-2xl modal-shadow z-10 overflow-hidden animate-in zoom-in-95 duration-200`}
+        className={`relative w-full ${maxWidthClasses[maxWidth]} h-full sm:h-auto max-h-[94vh] flex flex-col solid-menu-surface bg-[var(--bg-surface)] border-0 sm:border border-[var(--border-strong)] rounded-none sm:rounded-2xl modal-shadow z-10 overflow-hidden animate-in zoom-in-95 duration-200`}
         role="dialog"
         aria-modal="true"
       >

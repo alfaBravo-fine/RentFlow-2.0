@@ -659,7 +659,7 @@ impl DatabaseManager {
 
             CREATE TABLE IF NOT EXISTS expenses (
                 id TEXT PRIMARY KEY,
-                org_id TEXT NOT NULL DEFAULT 'org_demo_1',
+                org_id TEXT NOT NULL DEFAULT 'default_org',
                 property_id TEXT,
                 unit_id TEXT,
                 category TEXT NOT NULL,
@@ -755,7 +755,7 @@ impl DatabaseManager {
             "ALTER TABLE properties ADD COLUMN lng REAL;",
             "ALTER TABLE vendors ADD COLUMN category TEXT DEFAULT 'maintenance';",
             "ALTER TABLE vendors ADD COLUMN rating REAL;",
-            "ALTER TABLE expenses ADD COLUMN org_id TEXT DEFAULT 'org_demo_1';",
+            "ALTER TABLE expenses ADD COLUMN org_id TEXT DEFAULT 'default_org';",
             "ALTER TABLE expenses ADD COLUMN expense_date TEXT;",
             "ALTER TABLE expenses ADD COLUMN vendor_id TEXT;",
             "ALTER TABLE expenses ADD COLUMN receipt_path TEXT;",
@@ -2143,3 +2143,132 @@ pub async fn wipe_all_local_data(
 
     Ok(())
 }
+
+/// Real SQL GROUP BY aggregation for Dashboard Monthly Income vs. Operating Expenses chart.
+/// Returns 0 for every month when invoices, payments, and expenses tables are empty.
+#[tauri::command]
+pub async fn get_monthly_income_vs_expenses(
+    months: Option<i64>,
+    state: tauri::State<'_, DatabaseManager>,
+) -> Result<Vec<Value>, String> {
+    let month_count = months.unwrap_or(6).clamp(1, 24);
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+
+    let mut income_by_month: std::collections::HashMap<String, i64> =
+        std::collections::HashMap::new();
+    let mut expense_by_month: std::collections::HashMap<String, i64> =
+        std::collections::HashMap::new();
+
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT substr(p.paid_at, 1, 7) AS month_key, COALESCE(SUM(p.amount_minor), 0) AS total_minor
+                 FROM payments p
+                 LEFT JOIN invoices i ON i.id = p.invoice_id
+                 LEFT JOIN leases l ON l.id = i.lease_id
+                 LEFT JOIN units u ON u.id = l.unit_id
+                 LEFT JOIN properties pr ON pr.id = u.property_id
+                 WHERE p.deleted_at IS NULL
+                   AND p.paid_at IS NOT NULL
+                   AND length(p.paid_at) >= 7
+                   AND (
+                     p.invoice_id = 'unallocated'
+                     OR (
+                       i.id IS NOT NULL AND i.deleted_at IS NULL AND i.status != 'voided'
+                       AND l.id IS NOT NULL AND l.deleted_at IS NULL
+                       AND u.id IS NOT NULL AND u.deleted_at IS NULL
+                       AND pr.id IS NOT NULL AND pr.deleted_at IS NULL
+                     )
+                   )
+                 GROUP BY month_key",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let rows = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+            .map_err(|e| e.to_string())?;
+
+        for row in rows {
+            let (month_key, total) = row.map_err(|e| e.to_string())?;
+            *income_by_month.entry(month_key).or_insert(0) += total;
+        }
+    }
+
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT substr(COALESCE(NULLIF(i.period_start, ''), i.due_date), 1, 7) AS month_key,
+                        COALESCE(SUM(i.amount_paid_minor), 0) AS total_minor
+                 FROM invoices i
+                 INNER JOIN leases l ON l.id = i.lease_id AND l.deleted_at IS NULL
+                 INNER JOIN units u ON u.id = l.unit_id AND u.deleted_at IS NULL
+                 INNER JOIN properties pr ON pr.id = u.property_id AND pr.deleted_at IS NULL
+                 WHERE i.deleted_at IS NULL
+                   AND i.status != 'voided'
+                   AND i.amount_paid_minor > 0
+                   AND NOT EXISTS (
+                     SELECT 1 FROM payments p WHERE p.invoice_id = i.id AND p.deleted_at IS NULL
+                   )
+                   AND COALESCE(NULLIF(i.period_start, ''), i.due_date) IS NOT NULL
+                   AND length(COALESCE(NULLIF(i.period_start, ''), i.due_date)) >= 7
+                 GROUP BY month_key",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let rows = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+            .map_err(|e| e.to_string())?;
+
+        for row in rows {
+            let (month_key, total) = row.map_err(|e| e.to_string())?;
+            *income_by_month.entry(month_key).or_insert(0) += total;
+        }
+    }
+
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT substr(COALESCE(NULLIF(expense_date, ''), date), 1, 7) AS month_key,
+                        COALESCE(SUM(amount_minor), 0) AS total_minor
+                 FROM expenses
+                 WHERE deleted_at IS NULL
+                   AND COALESCE(NULLIF(expense_date, ''), date) IS NOT NULL
+                   AND length(COALESCE(NULLIF(expense_date, ''), date)) >= 7
+                 GROUP BY month_key",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let rows = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+            .map_err(|e| e.to_string())?;
+
+        for row in rows {
+            let (month_key, total) = row.map_err(|e| e.to_string())?;
+            *expense_by_month.entry(month_key).or_insert(0) += total;
+        }
+    }
+
+    let mut result = Vec::with_capacity(month_count as usize);
+    for offset in (0..month_count).rev() {
+        let modifier = format!("-{} months", offset);
+        let month_key: String = conn
+            .query_row(
+                "SELECT strftime('%Y-%m', date('now', 'localtime', 'start of month', ?1))",
+                params![modifier],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+
+        let inc = *income_by_month.get(&month_key).unwrap_or(&0);
+        let exp = *expense_by_month.get(&month_key).unwrap_or(&0);
+
+        result.push(json!({
+            "month_key": month_key,
+            "income_minor": inc,
+            "expense_minor": exp,
+        }));
+    }
+
+    Ok(result)
+}
+

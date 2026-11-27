@@ -7,6 +7,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { CommandPalette } from './CommandPalette';
 import { QuickCopyPanel } from './QuickCopyPanel';
 import { Logo } from '../Logo';
+import { SolidPopover } from '../ui/SolidPopover';
 import {
   Home,
   Building2,
@@ -46,6 +47,7 @@ export const TopNavTabs: React.FC = () => {
   const [isQuickCopyOpen, setIsQuickCopyOpen] = useState(false);
   const [isQuickActionOpen, setIsQuickActionOpen] = useState(false);
   const quickActionsRef = useRef<HTMLDivElement>(null);
+  const quickActionsBtnRef = useRef<HTMLButtonElement>(null);
 
   const navItems: Array<{ to: string; label: string; icon: React.ComponentType<{ className?: string }>; tourId?: string }> = [
     { to: '/', label: 'Dashboard', icon: Home },
@@ -70,7 +72,8 @@ export const TopNavTabs: React.FC = () => {
   ];
 
   return (
-    <header className="no-print bg-[var(--bg-surface)] border-b border-[var(--border-subtle)] shrink-0 select-none shadow-xs sticky top-0 z-50">
+    <>
+      <header className="top-nav-sticky no-print bg-[var(--bg-surface)] border-b border-[var(--border-subtle)] shrink-0 select-none shadow-xs sticky top-0 z-50">
       {/* Top Bar: Brand, Global Search, Quick Actions & Utility Tools */}
       <div className="flex items-center justify-between px-4 sm:px-8 h-16 border-b border-[var(--border-subtle)] gap-4">
         {/* Brand Header */}
@@ -107,6 +110,7 @@ export const TopNavTabs: React.FC = () => {
           {/* Quick Create Dropdown */}
           <div className="relative" ref={quickActionsRef}>
             <motion.button
+              ref={quickActionsBtnRef}
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
               transition={{ type: 'spring', stiffness: 450, damping: 28 }}
@@ -118,40 +122,48 @@ export const TopNavTabs: React.FC = () => {
               <ChevronDown className="w-3 h-3 opacity-80" />
             </motion.button>
 
-            {isQuickActionOpen && (
-              <div className="absolute right-0 mt-2 w-48 rounded-2xl bg-[var(--bg-popover,var(--bg-surface))] border border-[var(--border-strong)] modal-shadow py-2 z-[100] animate-in fade-in zoom-in-95 duration-150">
-                <button
-                  onClick={() => {
-                    setIsQuickActionOpen(false);
-                    navigate('/properties');
-                  }}
-                  className="w-full px-4 py-2 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-base)] flex items-center gap-2.5 cursor-pointer"
-                >
-                  <Building2 className="w-3.5 h-3.5 text-[var(--accent)]" />
-                  <span>Add Property / Unit</span>
-                </button>
-                <button
-                  onClick={() => {
-                    setIsQuickActionOpen(false);
-                    navigate('/invoices');
-                  }}
-                  className="w-full px-4 py-2 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-base)] flex items-center gap-2.5 cursor-pointer"
-                >
-                  <Receipt className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Record Payment</span>
-                </button>
-                <button
-                  onClick={() => {
-                    setIsQuickActionOpen(false);
-                    navigate('/maintenance');
-                  }}
-                  className="w-full px-4 py-2 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-base)] flex items-center gap-2.5 cursor-pointer"
-                >
-                  <Wrench className="w-3.5 h-3.5 text-amber-600" />
-                  <span>Log Work Order</span>
-                </button>
-              </div>
-            )}
+            <SolidPopover
+              isOpen={isQuickActionOpen}
+              onClose={() => setIsQuickActionOpen(false)}
+              anchorEl={quickActionsBtnRef.current}
+              align="right"
+              offsetY={8}
+              className="w-48 rounded-2xl py-2"
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setIsQuickActionOpen(false);
+                  navigate('/properties');
+                }}
+                className="w-full px-4 py-2 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-surface-sunken)] flex items-center gap-2.5 cursor-pointer"
+              >
+                <Building2 className="w-3.5 h-3.5 text-[var(--accent)]" />
+                <span>Add Property / Unit</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsQuickActionOpen(false);
+                  navigate('/invoices');
+                }}
+                className="w-full px-4 py-2 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-surface-sunken)] flex items-center gap-2.5 cursor-pointer"
+              >
+                <Receipt className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Record Payment</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsQuickActionOpen(false);
+                  navigate('/maintenance');
+                }}
+                className="w-full px-4 py-2 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-surface-sunken)] flex items-center gap-2.5 cursor-pointer"
+              >
+                <Wrench className="w-3.5 h-3.5 text-amber-600" />
+                <span>Log Work Order</span>
+              </button>
+            </SolidPopover>
           </div>
 
           {/* Quick-Copy Drawer Button */}
@@ -210,7 +222,7 @@ export const TopNavTabs: React.FC = () => {
       </div>
 
       {/* Horizontal Navigation Tab Bar (Linear / Notion Style) */}
-      <nav className="flex items-center px-4 sm:px-8 h-12 overflow-x-auto scrollbar-none gap-1 bg-[var(--bg-surface)]">
+      <nav className="flex items-center px-4 sm:px-8 h-12 overflow-x-auto gap-1 bg-[var(--bg-surface)]">
         {navItems.map((item) => {
           const Icon = item.icon;
           return (
@@ -245,11 +257,13 @@ export const TopNavTabs: React.FC = () => {
         })}
       </nav>
 
+      </header>
+
       {/* Global Command Palette */}
       <CommandPalette isOpen={isCommandOpen} onClose={() => setIsCommandOpen(false)} />
 
       {/* Quick-Copy Drawer */}
       <QuickCopyPanel isOpen={isQuickCopyOpen} onClose={() => setIsQuickCopyOpen(false)} />
-    </header>
+    </>
   );
 };

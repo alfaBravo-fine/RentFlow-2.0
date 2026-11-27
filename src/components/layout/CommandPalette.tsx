@@ -180,11 +180,11 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose 
   return (
     <div
       onClick={onClose}
-      className="fixed inset-0 z-50 flex items-start justify-center pt-16 sm:pt-24 bg-black/50 backdrop-blur-xs p-4 animate-in fade-in duration-150"
+      className="menu-backdrop-blur z-50 flex items-start justify-center pt-16 sm:pt-24 p-4 animate-in fade-in duration-150"
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-2xl rounded-2xl bg-[var(--bg-surface)] border border-[var(--border-strong)] modal-shadow overflow-hidden flex flex-col max-h-[80vh] animate-in zoom-in-95 duration-150"
+        className="w-full max-w-2xl rounded-2xl solid-menu-surface bg-[var(--bg-surface)] overflow-hidden flex flex-col max-h-[80vh] animate-in zoom-in-95 duration-150"
       >
         {/* Search Input Bar */}
         <div className="flex items-center px-4 border-b border-[var(--border-subtle)] gap-3 bg-[var(--bg-surface)]">
@@ -289,7 +289,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose 
         </div>
 
         {/* Footer shortcuts */}
-        <div className="px-4 py-2 border-t border-[var(--border-subtle)] bg-[var(--bg-base)] flex items-center justify-between text-[11px] text-[var(--text-secondary)]">
+        <div className="px-4 py-2 border-t border-[var(--border-subtle)] bg-[var(--bg-surface-sunken)] flex items-center justify-between text-[11px] text-[var(--text-secondary)]">
           <div className="flex items-center gap-3">
             <span>
               <kbd className="font-mono bg-[var(--bg-surface)] px-1.5 py-0.5 rounded border border-[var(--border-strong)] mr-1">

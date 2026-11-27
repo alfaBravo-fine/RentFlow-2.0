@@ -100,7 +100,7 @@ export const OwnersView: React.FC = () => {
     } else {
       db.insertItem<Owner>('owners', {
         id: generateUUID(),
-        org_id: 'org_demo_1',
+        org_id: 'default_org',
         name: name.trim(),
         email: email.trim() || null,
         phone: phone.trim() || null,

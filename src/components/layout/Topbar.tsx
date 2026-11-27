@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import {
@@ -31,8 +31,9 @@ import { useToast } from '../toast/ToastContext';
 import { CommandPalette } from './CommandPalette';
 import { QuickCopyPanel } from './QuickCopyPanel';
 import { Logo } from '../Logo';
-import { db } from '../../db/client';
-import { Lease, MaintenanceRequest, Tenant, Unit, DocumentVaultItem } from '../../db/schema';
+import { SolidPopover } from '../ui/SolidPopover';
+import { databaseService } from '../../db/DatabaseService';
+import { Property, Lease, MaintenanceRequest, Tenant, Unit, DocumentVaultItem } from '../../db/schema';
 import { formatLeaseName } from '../../lib/formatNames';
 
 export interface TopbarProps {
@@ -52,7 +53,9 @@ export const Topbar: React.FC<TopbarProps> = ({ isDarkMode, onToggleTheme, onOpe
   const [isQuickActionOpen, setIsQuickActionOpen] = useState(false);
 
   const notificationsRef = useRef<HTMLDivElement>(null);
+  const notificationsBtnRef = useRef<HTMLButtonElement>(null);
   const quickActionsRef = useRef<HTMLDivElement>(null);
+  const quickActionsBtnRef = useRef<HTMLButtonElement>(null);
 
   const { showToast } = useToast();
   const { syncState, lastSyncedAt, syncError, isRestoring } = useDriveSync();
@@ -99,28 +102,84 @@ export const Topbar: React.FC<TopbarProps> = ({ isDarkMode, onToggleTheme, onOpe
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Reactive DB subscription for active notifications
-  const [, setDbTick] = useState(0);
-  useEffect(() => {
-    return db.onWrite(() => {
-      setDbTick((prev) => prev + 1);
-    });
+  // Reactive SQLite query for active notifications (starting strictly empty)
+  const [alertSnapshot, setAlertSnapshot] = useState<{
+    properties: Property[];
+    units: Unit[];
+    leases: Lease[];
+    tenants: Tenant[];
+    maintenance: MaintenanceRequest[];
+    documents: DocumentVaultItem[];
+  }>({
+    properties: [],
+    units: [],
+    leases: [],
+    tenants: [],
+    maintenance: [],
+    documents: [],
+  });
+
+  const loadAlertsData = useCallback(async () => {
+    await databaseService.initialize();
+    const [properties, units, leases, tenants, maintenance, documents] = await Promise.all([
+      databaseService.getProperties(),
+      databaseService.getUnits(),
+      databaseService.getLeases(),
+      databaseService.getTenants(),
+      databaseService.getMaintenanceRequests(),
+      databaseService.getTable<DocumentVaultItem>('documents'),
+    ]);
+    setAlertSnapshot({ properties, units, leases, tenants, maintenance, documents });
   }, []);
 
-  // Compute Active Alerts (excluding soft-deleted records)
-  const leases = db.getTable<Lease>('leases').filter((l) => !l.deleted_at && !(l as any).deletedAt);
-  const tenants = db.getTable<Tenant>('tenants').filter((t) => !t.deleted_at && !(t as any).deletedAt);
-  const units = db.getTable<Unit>('units').filter((u) => !u.deleted_at && !(u as any).deletedAt);
-  const maintenance = db.getTable<MaintenanceRequest>('maintenance_requests').filter((m) => !m.deleted_at && !(m as any).deletedAt);
-  const documents = db.getTable<DocumentVaultItem>('documents').filter((d) => !d.deleted_at && !(d as any).deletedAt);
+  useEffect(() => {
+    let active = true;
+    const refresh = () => {
+      void loadAlertsData().catch(() => {
+        if (active) {
+          setAlertSnapshot({
+            properties: [],
+            units: [],
+            leases: [],
+            tenants: [],
+            maintenance: [],
+            documents: [],
+          });
+        }
+      });
+    };
+    refresh();
+    const unsubscribe = databaseService.onWrite(refresh);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [loadAlertsData]);
+
+  // Compute Active Alerts with strict cascading active-entity checks
+  const activeProperties = alertSnapshot.properties.filter((p) => !p.deleted_at && !(p as any).deletedAt);
+  const activePropertyIds = new Set(activeProperties.map((p) => p.id));
+  const units = alertSnapshot.units.filter(
+    (u) => !u.deleted_at && !(u as any).deletedAt && activePropertyIds.has(u.property_id)
+  );
+  const activeUnitIds = new Set(units.map((u) => u.id));
+  const leases = alertSnapshot.leases.filter(
+    (l) => !l.deleted_at && !(l as any).deletedAt && activeUnitIds.has(l.unit_id)
+  );
+  const tenants = alertSnapshot.tenants.filter((t) => !t.deleted_at && !(t as any).deletedAt);
+  const maintenance = alertSnapshot.maintenance.filter(
+    (m) => !m.deleted_at && !(m as any).deletedAt && (!m.unit_id || activeUnitIds.has(m.unit_id))
+  );
+  const documents = alertSnapshot.documents.filter((d) => !d.deleted_at && !(d as any).deletedAt);
 
   const now = new Date().getTime();
   const sixtyDaysMs = 60 * 24 * 60 * 60 * 1000;
   const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
 
   const rawExpiringLeases = leases.filter((l) => {
-    if (l.status === 'expired' || l.status === 'terminated') return false;
+    if (l.status === 'expired' || l.status === 'terminated' || !l.end_date) return false;
     const endMs = new Date(l.end_date).getTime();
+    if (Number.isNaN(endMs)) return false;
     const diff = endMs - now;
     return diff <= sixtyDaysMs;
   });
@@ -132,6 +191,7 @@ export const Topbar: React.FC<TopbarProps> = ({ isDarkMode, onToggleTheme, onOpe
   const rawExpiringDocuments = documents.filter((d) => {
     if (d.deleted_at || !d.expiry_date) return false;
     const expMs = new Date(d.expiry_date).getTime();
+    if (Number.isNaN(expMs)) return false;
     const diff = expMs - now;
     return diff <= thirtyDaysMs;
   });
@@ -147,7 +207,7 @@ export const Topbar: React.FC<TopbarProps> = ({ isDarkMode, onToggleTheme, onOpe
     ...activeExpiringDocuments.map((d) => `doc-${d.id}`),
   ];
 
-  // Badge count must only reflect unread, non-dismissed alerts
+  // Badge count strictly reflects real, unread, non-dismissed DB alerts
   const unreadAlertsCount = allAlertIds.filter((id) => !notificationsState[id]?.read).length;
   const totalVisibleAlerts = activeExpiringLeases.length + activePendingMaintenance.length + activeExpiringDocuments.length;
 
@@ -158,7 +218,7 @@ export const Topbar: React.FC<TopbarProps> = ({ isDarkMode, onToggleTheme, onOpe
 
   return (
     <>
-      <header className="no-print relative z-50 h-16 border-b border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 sm:px-8 flex items-center justify-between shrink-0 gap-3">
+      <header className="top-nav-sticky sticky top-0 z-50 no-print h-16 border-b border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 sm:px-8 flex items-center justify-between shrink-0 gap-3">
         {/* Left: Mobile Toggle & Global Search Input */}
         <div className="flex items-center gap-2 sm:gap-3 flex-1 max-w-xl">
           {/* Mobile hamburger menu toggle & logo */}
@@ -203,6 +263,7 @@ export const Topbar: React.FC<TopbarProps> = ({ isDarkMode, onToggleTheme, onOpe
           {/* Quick Actions Dropdown */}
           <div className="relative" ref={quickActionsRef}>
             <motion.button
+              ref={quickActionsBtnRef}
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
               transition={{ type: 'spring', stiffness: 450, damping: 28 }}
@@ -214,55 +275,65 @@ export const Topbar: React.FC<TopbarProps> = ({ isDarkMode, onToggleTheme, onOpe
               <ChevronDown className="w-3 h-3 opacity-80 ml-0.5" />
             </motion.button>
 
-            {isQuickActionOpen && (
-              <div className="absolute right-0 mt-2 w-48 rounded-2xl bg-[var(--bg-popover,var(--bg-surface))] border border-[var(--border-strong)] modal-shadow py-2 z-[100] animate-in fade-in zoom-in-95 duration-150">
-                <button
-                  onClick={() => {
-                    setIsQuickActionOpen(false);
-                    navigate('/leases');
-                  }}
-                  className="w-full px-4 py-2 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-base)] flex items-center gap-2.5 cursor-pointer"
-                >
-                  <FileText className="w-3.5 h-3.5 text-[var(--accent)]" />
-                  <span>New Lease</span>
-                </button>
-                <button
-                  onClick={() => {
-                    setIsQuickActionOpen(false);
-                    navigate('/properties');
-                  }}
-                  className="w-full px-4 py-2 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-base)] flex items-center gap-2.5 cursor-pointer"
-                >
-                  <Building2 className="w-3.5 h-3.5 text-[var(--accent)]" />
-                  <span>Add Property / Unit</span>
-                </button>
-                <button
-                  onClick={() => {
-                    setIsQuickActionOpen(false);
-                    navigate('/invoices');
-                  }}
-                  className="w-full px-4 py-2 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-base)] flex items-center gap-2.5 cursor-pointer"
-                >
-                  <Receipt className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Record Payment</span>
-                </button>
-                <button
-                  onClick={() => {
-                    setIsQuickActionOpen(false);
-                    navigate('/maintenance');
-                  }}
-                  className="w-full px-4 py-2 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-base)] flex items-center gap-2.5 cursor-pointer"
-                >
-                  <Wrench className="w-3.5 h-3.5 text-amber-600" />
-                  <span>Log Maintenance</span>
-                </button>
-              </div>
-            )}
+            <SolidPopover
+              isOpen={isQuickActionOpen}
+              onClose={() => setIsQuickActionOpen(false)}
+              anchorEl={quickActionsBtnRef.current}
+              align="right"
+              offsetY={8}
+              className="w-48 rounded-2xl py-2"
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setIsQuickActionOpen(false);
+                  navigate('/leases');
+                }}
+                className="w-full px-4 py-2 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-surface-sunken)] flex items-center gap-2.5 cursor-pointer"
+              >
+                <FileText className="w-3.5 h-3.5 text-[var(--accent)]" />
+                <span>New Lease</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsQuickActionOpen(false);
+                  navigate('/properties');
+                }}
+                className="w-full px-4 py-2 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-surface-sunken)] flex items-center gap-2.5 cursor-pointer"
+              >
+                <Building2 className="w-3.5 h-3.5 text-[var(--accent)]" />
+                <span>Add Property / Unit</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsQuickActionOpen(false);
+                  navigate('/invoices');
+                }}
+                className="w-full px-4 py-2 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-surface-sunken)] flex items-center gap-2.5 cursor-pointer"
+              >
+                <Receipt className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Record Payment</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsQuickActionOpen(false);
+                  navigate('/maintenance');
+                }}
+                className="w-full px-4 py-2 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-surface-sunken)] flex items-center gap-2.5 cursor-pointer"
+              >
+                <Wrench className="w-3.5 h-3.5 text-amber-600" />
+                <span>Log Maintenance</span>
+              </button>
+            </SolidPopover>
           </div>
 
           {/* Notifications Alert Bell & Popover */}
           <div className="relative" ref={notificationsRef}>
             <button
+              ref={notificationsBtnRef}
               onClick={() => setIsNotificationsOpen(!isNotificationsOpen)}
               className="w-9 h-9 rounded-full flex items-center justify-center text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-base)] transition-colors focus-ring cursor-pointer relative"
               title="System Alerts & Deadlines"
@@ -273,17 +344,23 @@ export const Topbar: React.FC<TopbarProps> = ({ isDarkMode, onToggleTheme, onOpe
               )}
             </button>
 
-            {isNotificationsOpen && (
-              <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl bg-[var(--bg-popover,var(--bg-surface))] border border-[var(--border-strong)] modal-shadow overflow-hidden z-[100] animate-in fade-in zoom-in-95 duration-150">
-                <div className="p-4 border-b border-[var(--border-subtle)] flex items-center justify-between bg-[var(--bg-popover,var(--bg-base))]">
-                  <div>
-                    <h4 className="text-xs font-bold text-[var(--text-primary)] uppercase tracking-wider">
-                      Portfolio Alerts
-                    </h4>
-                    <p className="text-[11px] text-[var(--text-secondary)]">
-                      {unreadAlertsCount} unread matter{unreadAlertsCount === 1 ? '' : 's'}
-                    </p>
-                  </div>
+            <SolidPopover
+              isOpen={isNotificationsOpen}
+              onClose={() => setIsNotificationsOpen(false)}
+              anchorEl={notificationsBtnRef.current}
+              align="right"
+              offsetY={8}
+              className="w-80 sm:w-96 rounded-2xl overflow-hidden"
+            >
+              <div className="p-4 border-b border-[var(--border-subtle)] flex items-center justify-between bg-[var(--bg-surface-sunken)]">
+                <div>
+                  <h4 className="text-xs font-bold text-[var(--text-primary)] uppercase tracking-wider">
+                    Portfolio Alerts
+                  </h4>
+                  <p className="text-[11px] text-[var(--text-secondary)]">
+                    {unreadAlertsCount} unread matter{unreadAlertsCount === 1 ? '' : 's'}
+                  </p>
+                </div>
                   <div className="flex items-center gap-2">
                     {unreadAlertsCount > 0 && (
                       <button
@@ -481,8 +558,7 @@ export const Topbar: React.FC<TopbarProps> = ({ isDarkMode, onToggleTheme, onOpe
                     </>
                   )}
                 </div>
-              </div>
-            )}
+            </SolidPopover>
           </div>
 
           {/* Theme Toggle */}

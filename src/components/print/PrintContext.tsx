@@ -36,7 +36,7 @@ export function clearPrintRoot(): void {
   const printRoot = document.getElementById('print-root');
   if (printRoot) {
     printRoot.innerHTML = '';
-    printRoot.className = 'hidden print:block bg-white text-black';
+    printRoot.className = 'hidden bg-white text-black';
   }
 }
 
@@ -80,7 +80,7 @@ export function printHtml(htmlString: string, onComplete?: () => void): void {
       activeCleanupFn = null;
     }
     window.removeEventListener('afterprint', cleanup);
-    printRoot.className = 'hidden print:block bg-white text-black';
+    printRoot.className = 'hidden bg-white text-black';
     printRoot.innerHTML = '';
     onComplete?.();
   };

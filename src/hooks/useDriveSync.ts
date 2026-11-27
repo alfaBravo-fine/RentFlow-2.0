@@ -12,6 +12,7 @@ import {
   pushToGoogleDrive as pushDriveSnapshot,
   restoreFromDrive as pullLatestDriveBackup,
   restoreFromSnapshot as restoreDriveSnapshot,
+  restoreGroupBackup as restoreDriveGroupBackup,
   revertChangeSnapshot as revertDriveChangeSnapshot,
 } from '../lib/googleDriveService';
 
@@ -171,7 +172,7 @@ export function useDriveSync() {
   }, [user]);
 
   const restoreFromSnapshot = useCallback(
-    async (filename: string) => {
+    async (filename: string, folderId?: string) => {
       if (!user) {
         throw new Error('Please sign in with Google to restore a full backup.');
       }
@@ -186,7 +187,7 @@ export function useDriveSync() {
       setSyncError(null);
 
       try {
-        const result = await restoreDriveSnapshot(filename);
+        const result = await restoreDriveSnapshot(filename, folderId);
         if (result.restored) {
           setSyncState('synced');
           const syncedTime = useAppSettingsStore.getState().lastDriveSync || new Date().toISOString();
@@ -211,8 +212,49 @@ export function useDriveSync() {
     [user, setLastDriveSync, setIsRestoring, setSyncState, setSyncError]
   );
 
+  const restoreGroupBackup = useCallback(
+    async (folderName: string) => {
+      if (!user) {
+        throw new Error('Please sign in with Google to restore a grouped backup.');
+      }
+
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+
+      setIsRestoring(true);
+      setSyncState('syncing');
+      setSyncError(null);
+
+      try {
+        const result = await restoreDriveGroupBackup(folderName);
+        if (result.restored) {
+          setSyncState('synced');
+          const syncedTime = useAppSettingsStore.getState().lastDriveSync || new Date().toISOString();
+          setLastDriveSync(syncedTime);
+        } else {
+          setSyncState('idle');
+        }
+        setSyncError(null);
+        return result;
+      } catch (err: unknown) {
+        const msg =
+          typeof err === 'string'
+            ? err
+            : (err as { message?: string })?.message || 'Grouped backup restore failed';
+        setSyncState('error');
+        setSyncError(msg);
+        throw err;
+      } finally {
+        setIsRestoring(false);
+      }
+    },
+    [user, setLastDriveSync, setIsRestoring, setSyncState, setSyncError]
+  );
+
   const revertChangeSnapshot = useCallback(
-    async (filename: string) => {
+    async (filename: string, folderId?: string) => {
       if (!user) {
         throw new Error('Please sign in with Google to revert a recorded change.');
       }
@@ -227,7 +269,7 @@ export function useDriveSync() {
       setSyncError(null);
 
       try {
-        const result = await revertDriveChangeSnapshot(filename);
+        const result = await revertDriveChangeSnapshot(filename, folderId);
         if (result.restored) {
           setSyncState('synced');
           const syncedTime = useAppSettingsStore.getState().lastDriveSync || new Date().toISOString();
@@ -360,6 +402,7 @@ export function useDriveSync() {
     getBackupList,
     getGroupedBackupList,
     restoreFromSnapshot,
+    restoreGroupBackup,
     revertChangeSnapshot,
     restoreFromDrive: triggerRestore,
   };

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { db, parseDepositDeductions } from '../../db/client';
 import { Lease, Tenant, Unit, Deposit, DepositDeduction, Property } from '../../db/schema';
 import { usePack } from '../../countries/usePack';
@@ -13,6 +13,7 @@ import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Input, Select } from '../../components/ui/Input';
 import { Modal } from '../../components/ui/Modal';
+import { SolidPopover } from '../../components/ui/SolidPopover';
 import { emitTourAction } from '../../hooks/useAppTour';
 import {
   FileText,
@@ -60,6 +61,7 @@ export const LeasesView: React.FC = () => {
 
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
+  const menuAnchorRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingLease, setEditingLease] = useState<Lease | null>(null);
@@ -94,7 +96,7 @@ export const LeasesView: React.FC = () => {
   // Delete confirmation modal
   const [deletingLease, setDeletingLease] = useState<Lease | null>(null);
 
-  // Close active dropdown menu on outside click
+  // Close active dropdown menu on outside click (handled cleanly by SolidPopover backdrop too)
   useEffect(() => {
     const handleOutside = () => setActiveMenuId(null);
     window.addEventListener('click', handleOutside);
@@ -571,6 +573,10 @@ export const LeasesView: React.FC = () => {
                     {/* Action Dropdown Menu */}
                     <div className="relative">
                       <button
+                        ref={(el) => {
+                          menuAnchorRefs.current[lease.id] = el;
+                        }}
+                        type="button"
                         onClick={(e) => {
                           e.stopPropagation();
                           setActiveMenuId(isMenuOpen ? null : lease.id);
@@ -581,63 +587,70 @@ export const LeasesView: React.FC = () => {
                         <MoreVertical className="w-4 h-4" />
                       </button>
 
-                      {isMenuOpen && (
-                        <div
-                          onClick={(e) => e.stopPropagation()}
-                          className="absolute right-0 mt-1 w-48 rounded-xl bg-[var(--bg-surface)] border border-[var(--border-strong)] modal-shadow py-1.5 z-30 animate-in fade-in zoom-in-95 duration-150"
+                      <SolidPopover
+                        isOpen={isMenuOpen}
+                        onClose={() => setActiveMenuId(null)}
+                        anchorEl={menuAnchorRefs.current[lease.id] || null}
+                        align="right"
+                        offsetY={6}
+                        className="w-52 rounded-xl py-1.5"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveMenuId(null);
+                            setDetailsLeaseId(lease.id);
+                          }}
+                          className="w-full px-3.5 py-2 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-surface-sunken)] flex items-center gap-2 cursor-pointer"
                         >
-                          <button
-                            onClick={() => {
-                              setActiveMenuId(null);
-                              setDetailsLeaseId(lease.id);
-                            }}
-                            className="w-full px-3.5 py-2 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-base)] flex items-center gap-2 cursor-pointer"
-                          >
-                            <Eye className="w-3.5 h-3.5 text-[var(--accent)]" />
-                            <span>Lease Details & Ledger</span>
-                          </button>
-                          <button
-                            onClick={() => {
-                              setActiveMenuId(null);
-                              handleOpenEdit(lease);
-                            }}
-                            className="w-full px-3.5 py-2 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-base)] flex items-center gap-2 cursor-pointer"
-                          >
-                            <Pencil className="w-3.5 h-3.5 text-[var(--text-secondary)]" />
-                            <span>Edit Contract</span>
-                          </button>
-                          <button
-                            onClick={() => {
-                              setActiveMenuId(null);
-                              setChecklistLease(lease);
-                            }}
-                            className="w-full px-3.5 py-2 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-base)] flex items-center gap-2 cursor-pointer"
-                          >
-                            <FileCheck className="w-3.5 h-3.5 text-emerald-600" />
-                            <span>Move-In / Move-Out Checklist</span>
-                          </button>
-                          <button
-                            onClick={() => {
-                              setActiveMenuId(null);
-                              handleOpenDeductionModal(lease.id);
-                            }}
-                            className="w-full px-3.5 py-2 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-base)] flex items-center gap-2 cursor-pointer"
-                          >
-                            <Wallet className="w-3.5 h-3.5 text-[var(--text-secondary)]" />
-                            <span>Record Deduction</span>
-                          </button>
-                          <button
-                            onClick={() => {
-                              setActiveMenuId(null);
-                              setDeletingLease(lease);
-                            }}
-                            className="w-full px-3.5 py-2 text-left text-xs text-[var(--status-danger-fg)] hover:bg-rose-500/10 flex items-center gap-2 cursor-pointer"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                            <span>Archive Lease</span>
-                          </button>
-                        </div>
-                      )}
+                          <Eye className="w-3.5 h-3.5 text-[var(--accent)]" />
+                          <span>Lease Details &amp; Ledger</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveMenuId(null);
+                            handleOpenEdit(lease);
+                          }}
+                          className="w-full px-3.5 py-2 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-surface-sunken)] flex items-center gap-2 cursor-pointer"
+                        >
+                          <Pencil className="w-3.5 h-3.5 text-[var(--text-secondary)]" />
+                          <span>Edit Contract</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveMenuId(null);
+                            setChecklistLease(lease);
+                          }}
+                          className="w-full px-3.5 py-2 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-surface-sunken)] flex items-center gap-2 cursor-pointer"
+                        >
+                          <FileCheck className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Move-In / Move-Out Checklist</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveMenuId(null);
+                            handleOpenDeductionModal(lease.id);
+                          }}
+                          className="w-full px-3.5 py-2 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-surface-sunken)] flex items-center gap-2 cursor-pointer"
+                        >
+                          <Wallet className="w-3.5 h-3.5 text-[var(--text-secondary)]" />
+                          <span>Record Deduction</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveMenuId(null);
+                            setDeletingLease(lease);
+                          }}
+                          className="w-full px-3.5 py-2 text-left text-xs text-[var(--status-danger-fg)] hover:bg-rose-500/10 flex items-center gap-2 cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Archive Lease</span>
+                        </button>
+                      </SolidPopover>
                     </div>
                   </div>
 

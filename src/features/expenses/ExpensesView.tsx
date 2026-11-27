@@ -112,7 +112,7 @@ export const ExpensesView: React.FC = () => {
     } else {
       db.insertItem<Expense>('expenses', {
         id: generateUUID(),
-        org_id: 'org_demo_1',
+        org_id: 'default_org',
         property_id: propertyId || null,
         unit_id: unitId || null,
         category,

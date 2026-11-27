@@ -88,14 +88,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpenMobile, onCloseMobile })
       {isOpenMobile && (
         <div
           onClick={onCloseMobile}
-          className="fixed inset-0 z-40 bg-black/40 backdrop-blur-xs md:hidden animate-in fade-in duration-200"
+          className="menu-backdrop-blur z-40 md:hidden animate-in fade-in duration-200"
         />
       )}
 
       {/* Modern Sidebar Container */}
       <aside
         className={`fixed md:static inset-y-0 left-0 z-50 flex flex-col h-full bg-[var(--bg-surface)] border-r border-[var(--border-subtle)] transition-all duration-200 shrink-0 select-none ${
-          isOpenMobile ? 'translate-x-0 w-[260px] shadow-2xl' : '-translate-x-full md:translate-x-0'
+          isOpenMobile ? 'translate-x-0 w-[260px] shadow-2xl max-md:solid-menu-surface' : '-translate-x-full md:translate-x-0'
         } ${
           isCollapsed ? 'md:w-[72px] lg:w-[72px]' : 'md:w-[72px] lg:w-[260px]'
         }`}

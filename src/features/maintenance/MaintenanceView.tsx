@@ -141,7 +141,7 @@ export const MaintenanceView: React.FC = () => {
       const unit = units.find((u) => u.id === req.unit_id);
       db.insertItem<Expense>('expenses', {
         id: generateUUID(),
-        org_id: 'org_demo_1',
+        org_id: 'default_org',
         property_id: unit?.property_id || null,
         unit_id: req.unit_id,
         category: 'repairs_and_maintenance',

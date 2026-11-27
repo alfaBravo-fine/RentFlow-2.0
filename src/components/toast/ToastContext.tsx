@@ -50,7 +50,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         {toasts.map((toast) => (
           <div
             key={toast.id}
-            className={`pointer-events-auto p-3.5 rounded-[8px] bg-[var(--surface-raised)] border border-[var(--border)] modal-shadow flex items-start gap-3 transition-all ${
+            className={`pointer-events-auto p-3.5 rounded-[8px] solid-menu-surface bg-[var(--bg-surface)] flex items-start gap-3 transition-all ${
               toast.type === 'success'
                 ? 'border-l-4 border-l-[var(--status-success-fg)]'
                 : toast.type === 'error'
@@ -68,7 +68,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               <Info className="w-4 h-4 text-[var(--accent)] shrink-0 mt-0.5" />
             )}
 
-            <div className="flex-1 text-xs text-[var(--text)] font-medium leading-relaxed">
+            <div className="flex-1 text-xs text-[var(--text-primary)] font-medium leading-relaxed">
               {toast.message}
             </div>
 
@@ -86,7 +86,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
             <button
               onClick={() => removeToast(toast.id)}
-              className="text-[var(--text-subtle)] hover:text-[var(--text)] shrink-0 p-0.5 cursor-pointer"
+              className="text-[var(--text-subtle)] hover:text-[var(--text-primary)] shrink-0 p-0.5 cursor-pointer"
             >
               <X className="w-3.5 h-3.5" />
             </button>

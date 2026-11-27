@@ -148,7 +148,7 @@ export const TenantsView: React.FC = () => {
     } else {
       const created = db.insertItem<Tenant>('tenants', {
         id: generateUUID(),
-        org_id: 'org_demo_1',
+        org_id: 'default_org',
         name: name.trim(),
         email: email.trim(),
         phone: phone.trim(),

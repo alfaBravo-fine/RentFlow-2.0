@@ -19,7 +19,9 @@ const BACKUPS_FOLDER_NAME: &str = "RentFlow Grouped Backups";
 const LEGACY_BACKUPS_FOLDER_NAME: &str = "RentFlow Backups";
 const MANIFEST_FILENAME: &str = "manifest.json";
 const MAX_FULL_BACKUP_RETENTION: usize = 30;
-const MAX_CHANGE_HISTORY_RETENTION: usize = 20;
+const MAX_CHANGE_HISTORY_RETENTION: usize = 60;
+const MAX_GROUP_RETENTION: usize = 30;
+const GROUP_WINDOW_SECS: i64 = 3_600; // 1 hour grouping window
 const FULL_BACKUP_CHANGE_THRESHOLD: u32 = 10;
 const FULL_BACKUP_INTERVAL_SECS: i64 = 86_400; // 24 hours
 
@@ -34,6 +36,10 @@ pub struct BackupManifestEntry {
     pub file_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub record_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -51,6 +57,31 @@ pub struct ChangeHistoryEntry {
     pub size_bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct BackupGroupEntry {
+    pub folder_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default)]
+    pub started_epoch: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full_snapshot_filename: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full_snapshot_file_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full_snapshot_size: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_count: Option<usize>,
+    #[serde(default)]
+    pub changes: Vec<ChangeHistoryEntry>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
@@ -59,6 +90,8 @@ pub struct GroupedManifest {
     pub full_backups: Vec<BackupManifestEntry>,
     #[serde(default)]
     pub change_history: Vec<ChangeHistoryEntry>,
+    #[serde(default)]
+    pub groups: Vec<BackupGroupEntry>,
     #[serde(default)]
     pub changes_since_full_backup: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -71,6 +104,8 @@ pub struct GroupedManifest {
 pub struct GroupedBackupList {
     pub full_backups: Vec<BackupManifestEntry>,
     pub change_history: Vec<ChangeHistoryEntry>,
+    #[serde(default)]
+    pub groups: Vec<BackupGroupEntry>,
     pub changes_since_full_backup: u32,
     pub last_full_backup_at: Option<String>,
 }
@@ -272,26 +307,34 @@ fn count_snapshot_records(snapshot: &serde_json::Value) -> usize {
         .unwrap_or(0)
 }
 
-fn build_full_backup_filename(year: i64, month: u32, day: u32) -> String {
-    format!("FULL_BACKUP_{:04}-{:02}-{:02}.enc", year, month, day)
-}
-
-fn build_unique_change_filename(
-    existing: &[ChangeHistoryEntry],
-    entity: &str,
-    action: &str,
+fn build_hourly_group_folder_name(
     year: i64,
     month: u32,
     day: u32,
     hour: u32,
     minute: u32,
 ) -> String {
+    format!(
+        "Backup_{:04}-{:02}-{:02}_{:02}-{:02}",
+        year, month, day, hour, minute
+    )
+}
+
+fn build_group_full_backup_filename(folder_name: &str) -> String {
+    let suffix = folder_name.strip_prefix("Backup_").unwrap_or(folder_name);
+    format!("FULL_BACKUP_{}.enc", suffix)
+}
+
+fn build_unique_change_filename(
+    existing: &[ChangeHistoryEntry],
+    entity: &str,
+    action: &str,
+    hour: u32,
+    minute: u32,
+) -> String {
     let entity_slug = sanitize_slug(entity, "record");
     let action_slug = sanitize_slug(action, "edit");
-    let base = format!(
-        "{}_{}_{:04}-{:02}-{:02}_{:02}{:02}",
-        entity_slug, action_slug, year, month, day, hour, minute
-    );
+    let base = format!("{}_{}_{:02}-{:02}", entity_slug, action_slug, hour, minute);
     let primary = format!("{}.enc", base);
     if !existing.iter().any(|e| e.filename == primary) {
         return primary;
@@ -305,6 +348,72 @@ fn build_unique_change_filename(
         }
         suffix += 1;
     }
+}
+
+fn synthesize_legacy_groups(manifest: &GroupedManifest) -> Vec<BackupGroupEntry> {
+    if !manifest.groups.is_empty() {
+        return manifest.groups.clone();
+    }
+
+    let mut by_hour: std::collections::BTreeMap<String, BackupGroupEntry> =
+        std::collections::BTreeMap::new();
+
+    for full in &manifest.full_backups {
+        let date_part = full.date.get(0..10).unwrap_or("2026-01-01");
+        let hour_part = full.date.get(11..13).unwrap_or("00");
+        let folder_name = format!("Backup_{}_{}-00", date_part, hour_part);
+        let entry = by_hour
+            .entry(folder_name.clone())
+            .or_insert_with(|| BackupGroupEntry {
+                folder_name,
+                folder_id: full.folder_id.clone(),
+                created_at: full.date.clone(),
+                updated_at: full.date.clone(),
+                started_epoch: 0,
+                full_snapshot_filename: Some(full.filename.clone()),
+                full_snapshot_file_id: full.file_id.clone(),
+                full_snapshot_size: Some(full.size.clone()),
+                record_count: full.record_count,
+                changes: Vec::new(),
+            });
+        if entry.full_snapshot_filename.is_none() {
+            entry.full_snapshot_filename = Some(full.filename.clone());
+            entry.full_snapshot_file_id = full.file_id.clone();
+            entry.full_snapshot_size = Some(full.size.clone());
+            entry.record_count = full.record_count;
+        }
+    }
+
+    for ch in &manifest.change_history {
+        let date_part = ch.date.get(0..10).unwrap_or("2026-01-01");
+        let hour_part = ch.date.get(11..13).unwrap_or("00");
+        let folder_name = ch
+            .folder_name
+            .clone()
+            .unwrap_or_else(|| format!("Backup_{}_{}-00", date_part, hour_part));
+        let entry = by_hour
+            .entry(folder_name.clone())
+            .or_insert_with(|| BackupGroupEntry {
+                folder_name,
+                folder_id: ch.folder_id.clone(),
+                created_at: ch.date.clone(),
+                updated_at: ch.date.clone(),
+                started_epoch: 0,
+                full_snapshot_filename: None,
+                full_snapshot_file_id: None,
+                full_snapshot_size: None,
+                record_count: None,
+                changes: Vec::new(),
+            });
+        entry.changes.push(ch.clone());
+        if ch.date > entry.updated_at {
+            entry.updated_at = ch.date.clone();
+        }
+    }
+
+    let mut groups: Vec<BackupGroupEntry> = by_hour.into_values().collect();
+    groups.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    groups
 }
 
 async fn find_folder_by_name(
@@ -446,6 +555,125 @@ async fn get_or_create_backups_folder_resilient(
     };
 
     Ok((token, created.id))
+}
+
+async fn find_subfolder_in_folder(
+    client: &reqwest::Client,
+    token: &str,
+    parent_folder_id: &str,
+    folder_name: &str,
+) -> Result<Option<DriveFileItem>, String> {
+    validate_drive_id(parent_folder_id)?;
+    if folder_name.contains('\'') || folder_name.contains('\\') {
+        return Err("Invalid subfolder name for Drive lookup.".to_string());
+    }
+
+    let query = format!(
+        "name = '{}' and '{}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false",
+        folder_name, parent_folder_id
+    );
+
+    let res = client
+        .get("https://www.googleapis.com/drive/v3/files")
+        .header("Authorization", format!("Bearer {}", token))
+        .query(&[
+            ("spaces", "drive"),
+            ("q", query.as_str()),
+            ("orderBy", "createdTime desc"),
+            ("fields", "files(id, name, modifiedTime)"),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("Drive subfolder lookup error: {}", e))?;
+
+    if res.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err("UNAUTHORIZED".to_string());
+    }
+
+    if !res.status().is_success() {
+        let err_text = res.text().await.unwrap_or_default();
+        return Err(format!("Drive subfolder query failed: {}", err_text));
+    }
+
+    let list: DriveFileList = res
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Drive subfolder list: {}", e))?;
+
+    Ok(list.files.into_iter().next())
+}
+
+async fn create_subfolder_in_folder(
+    client: &reqwest::Client,
+    token: &str,
+    parent_folder_id: &str,
+    folder_name: &str,
+) -> Result<DriveFileItem, String> {
+    validate_drive_id(parent_folder_id)?;
+    let metadata = serde_json::json!({
+        "name": folder_name,
+        "mimeType": "application/vnd.google-apps.folder",
+        "parents": [parent_folder_id]
+    });
+
+    let res = client
+        .post("https://www.googleapis.com/drive/v3/files")
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .json(&metadata)
+        .send()
+        .await
+        .map_err(|e| format!("Drive subfolder creation error: {}", e))?;
+
+    if res.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err("UNAUTHORIZED".to_string());
+    }
+
+    if !res.status().is_success() {
+        let err_text = res.text().await.unwrap_or_default();
+        return Err(format!(
+            "Failed to create '{}' subfolder in Google Drive: {}",
+            folder_name, err_text
+        ));
+    }
+
+    res.json::<DriveFileItem>()
+        .await
+        .map_err(|e| format!("Failed to parse created subfolder metadata: {}", e))
+}
+
+async fn get_or_create_subfolder_resilient(
+    app: &AppHandle,
+    auth_state: &AuthState,
+    client: &reqwest::Client,
+    token: &mut String,
+    parent_folder_id: &str,
+    folder_name: &str,
+) -> Result<String, String> {
+    let existing = match find_subfolder_in_folder(client, token, parent_folder_id, folder_name).await {
+        Ok(found) => found,
+        Err(err) if err == "UNAUTHORIZED" => {
+            *token = refresh_google_access_token(Some(app), auth_state).await?;
+            find_subfolder_in_folder(client, token, parent_folder_id, folder_name).await?
+        }
+        Err(err) => return Err(err),
+    };
+
+    if let Some(item) = existing {
+        return Ok(item.id);
+    }
+
+    let created = match create_subfolder_in_folder(client, token, parent_folder_id, folder_name).await
+    {
+        Ok(item) => item,
+        Err(err) if err == "UNAUTHORIZED" => {
+            *token = refresh_google_access_token(Some(app), auth_state).await?;
+            create_subfolder_in_folder(client, token, parent_folder_id, folder_name).await?
+        }
+        Err(err) => return Err(err),
+    };
+
+    Ok(created.id)
 }
 
 async fn find_file_in_folder(
@@ -697,6 +925,11 @@ async fn fetch_manifest_in_folder(
 
     manifest.full_backups.sort_by(|a, b| b.date.cmp(&a.date));
     manifest.change_history.sort_by(|a, b| b.date.cmp(&a.date));
+    manifest.groups.sort_by(|a, b| {
+        b.started_epoch
+            .cmp(&a.started_epoch)
+            .then_with(|| b.created_at.cmp(&a.created_at))
+    });
     Ok((Some(manifest_item.id), manifest))
 }
 
@@ -777,13 +1010,99 @@ async fn save_manifest_in_folder_resilient(
     }
 }
 
-async fn compile_and_upload_full_backup(
+async fn ensure_active_hourly_group(
+    app: &AppHandle,
+    auth_state: &AuthState,
+    client: &reqwest::Client,
+    token: &mut String,
+    root_folder_id: &str,
+    manifest: &mut GroupedManifest,
+    year: i64,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    epoch_secs: i64,
+    iso_timestamp: &str,
+) -> Result<(usize, String, String), String> {
+    manifest.groups.sort_by(|a, b| {
+        b.started_epoch
+            .cmp(&a.started_epoch)
+            .then_with(|| b.created_at.cmp(&a.created_at))
+    });
+
+    if let Some(active) = manifest.groups.first_mut() {
+        let elapsed = epoch_secs.saturating_sub(active.started_epoch);
+        if active.started_epoch > 0 && epoch_secs >= active.started_epoch && elapsed < GROUP_WINDOW_SECS {
+            let group_folder_name = active.folder_name.clone();
+            let resolved_folder_id = match active.folder_id.clone() {
+                Some(fid) if !fid.is_empty() => fid,
+                _ => {
+                    let fid = get_or_create_subfolder_resilient(
+                        app,
+                        auth_state,
+                        client,
+                        token,
+                        root_folder_id,
+                        &group_folder_name,
+                    )
+                    .await?;
+                    active.folder_id = Some(fid.clone());
+                    fid
+                }
+            };
+            active.updated_at = iso_timestamp.to_string();
+            return Ok((0, group_folder_name, resolved_folder_id));
+        }
+    }
+
+    let group_folder_name = build_hourly_group_folder_name(year, month, day, hour, minute);
+    let group_folder_id = get_or_create_subfolder_resilient(
+        app,
+        auth_state,
+        client,
+        token,
+        root_folder_id,
+        &group_folder_name,
+    )
+    .await?;
+
+    manifest.groups.insert(
+        0,
+        BackupGroupEntry {
+            folder_name: group_folder_name.clone(),
+            folder_id: Some(group_folder_id.clone()),
+            created_at: iso_timestamp.to_string(),
+            updated_at: iso_timestamp.to_string(),
+            started_epoch: epoch_secs,
+            full_snapshot_filename: None,
+            full_snapshot_file_id: None,
+            full_snapshot_size: None,
+            record_count: None,
+            changes: Vec::new(),
+        },
+    );
+
+    while manifest.groups.len() > MAX_GROUP_RETENTION {
+        if let Some(oldest_group) = manifest.groups.pop() {
+            if let Some(old_fid) = oldest_group.folder_id {
+                let _ = delete_drive_file(client, token, &old_fid).await;
+            }
+        }
+    }
+
+    Ok((0, group_folder_name, group_folder_id))
+}
+
+async fn compile_and_upload_group_full_backup(
     app: &AppHandle,
     auth_state: &AuthState,
     db_state: &State<'_, DatabaseManager>,
     client: &reqwest::Client,
     token: &mut String,
-    folder_id: &str,
+    group_idx: usize,
+    group_folder_name: &str,
+    group_folder_id: &str,
     google_id: &str,
     manifest: &mut GroupedManifest,
 ) -> Result<(BackupManifestEntry, String), String> {
@@ -801,6 +1120,7 @@ async fn compile_and_upload_full_backup(
         "kind": "full_backup",
         "version": "2.1.0",
         "exportedAt": iso_timestamp,
+        "groupFolder": group_folder_name,
         "userId": google_id,
         "data": full_snapshot
     });
@@ -809,35 +1129,44 @@ async fn compile_and_upload_full_backup(
     let byte_len = encrypted_bytes.len() as u64;
     let formatted_size = format_human_size(byte_len);
 
-    let full_filename = build_full_backup_filename(year, month, day);
+    let full_filename = build_group_full_backup_filename(group_folder_name);
 
-    let existing_same_day = find_file_in_folder(client, token, folder_id, &full_filename)
-        .await
-        .ok()
-        .flatten();
+    let mut existing_file_id = manifest
+        .groups
+        .get(group_idx)
+        .and_then(|g| g.full_snapshot_file_id.clone())
+        .filter(|id| !id.is_empty());
 
-    let file_id = if let Some(existing) = existing_same_day {
+    if existing_file_id.is_none() {
+        existing_file_id = find_file_in_folder(client, token, group_folder_id, &full_filename)
+            .await
+            .ok()
+            .flatten()
+            .map(|f| f.id);
+    }
+
+    let file_id = if let Some(existing_id) = existing_file_id {
         match patch_drive_file(
             client,
             token,
-            &existing.id,
+            &existing_id,
             "application/octet-stream",
             encrypted_bytes.clone(),
         )
         .await
         {
-            Ok(()) => existing.id,
+            Ok(()) => existing_id,
             Err(err) if err == "UNAUTHORIZED" => {
                 *token = refresh_google_access_token(Some(app), auth_state).await?;
                 patch_drive_file(
                     client,
                     token,
-                    &existing.id,
+                    &existing_id,
                     "application/octet-stream",
                     encrypted_bytes,
                 )
                 .await?;
-                existing.id
+                existing_id
             }
             Err(err) => return Err(err),
         }
@@ -845,7 +1174,7 @@ async fn compile_and_upload_full_backup(
         let uploaded = match upload_new_file_in_folder(
             client,
             token,
-            folder_id,
+            group_folder_id,
             &full_filename,
             "application/octet-stream",
             encrypted_bytes.clone(),
@@ -858,7 +1187,7 @@ async fn compile_and_upload_full_backup(
                 upload_new_file_in_folder(
                     client,
                     token,
-                    folder_id,
+                    group_folder_id,
                     &full_filename,
                     "application/octet-stream",
                     encrypted_bytes,
@@ -870,6 +1199,14 @@ async fn compile_and_upload_full_backup(
         uploaded.id
     };
 
+    if let Some(group) = manifest.groups.get_mut(group_idx) {
+        group.full_snapshot_filename = Some(full_filename.clone());
+        group.full_snapshot_file_id = Some(file_id.clone());
+        group.full_snapshot_size = Some(formatted_size.clone());
+        group.record_count = Some(record_count);
+        group.updated_at = iso_timestamp.clone();
+    }
+
     let entry = BackupManifestEntry {
         filename: full_filename.clone(),
         date: iso_timestamp.clone(),
@@ -877,18 +1214,15 @@ async fn compile_and_upload_full_backup(
         size_bytes: Some(byte_len),
         file_id: Some(file_id.clone()),
         record_count: Some(record_count),
+        folder_name: Some(group_folder_name.to_string()),
+        folder_id: Some(group_folder_id.to_string()),
     };
 
-    // Replace existing entry for the same date filename so FULL_BACKUP_YYYY-MM-DD.enc stays clean
     manifest.full_backups.retain(|b| b.filename != full_filename);
     manifest.full_backups.insert(0, entry.clone());
 
     while manifest.full_backups.len() > MAX_FULL_BACKUP_RETENTION {
-        if let Some(oldest) = manifest.full_backups.pop() {
-            if let Some(fid) = oldest.file_id {
-                let _ = delete_drive_file(client, token, &fid).await;
-            }
-        }
+        let _ = manifest.full_backups.pop();
     }
 
     manifest.changes_since_full_backup = 0;
@@ -921,21 +1255,46 @@ pub async fn drive_push_backup(
         _ => session_google_id,
     };
 
+    let (year, month, day, hour, minute, second, epoch_secs) = utc_now_parts();
+    let iso_timestamp = format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, hour, minute, second
+    );
+
     let client = reqwest::Client::new();
-    let (mut token, folder_id) =
+    let (mut token, root_folder_id) =
         get_or_create_backups_folder_resilient(&app, &auth_state, &client).await?;
 
     let (manifest_file_id, mut manifest) =
-        fetch_manifest_in_folder_resilient(&app, &auth_state, &client, &mut token, &folder_id)
+        fetch_manifest_in_folder_resilient(&app, &auth_state, &client, &mut token, &root_folder_id)
             .await?;
 
-    let (entry, uploaded_id) = compile_and_upload_full_backup(
+    let (group_idx, group_folder_name, group_folder_id) = ensure_active_hourly_group(
+        &app,
+        &auth_state,
+        &client,
+        &mut token,
+        &root_folder_id,
+        &mut manifest,
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        epoch_secs,
+        &iso_timestamp,
+    )
+    .await?;
+
+    let (entry, uploaded_id) = compile_and_upload_group_full_backup(
         &app,
         &auth_state,
         &db_state,
         &client,
         &mut token,
-        &folder_id,
+        group_idx,
+        &group_folder_name,
+        &group_folder_id,
         &effective_google_id,
         &mut manifest,
     )
@@ -946,7 +1305,7 @@ pub async fn drive_push_backup(
         &auth_state,
         &client,
         &mut token,
-        &folder_id,
+        &root_folder_id,
         manifest_file_id,
         &manifest,
     )
@@ -958,14 +1317,14 @@ pub async fn drive_push_backup(
         success: true,
         synced_at: entry.date.clone(),
         file_id: Some(uploaded_id),
-        folder_id: Some(folder_id),
+        folder_id: Some(group_folder_id),
         filename: Some(entry.filename.clone()),
-        snapshot_count: manifest.full_backups.len(),
+        snapshot_count: manifest.groups.len(),
         full_backup_triggered: true,
         full_backup_filename: Some(entry.filename.clone()),
         message: format!(
-            "Saved full backup {} in '{}'",
-            entry.filename, BACKUPS_FOLDER_NAME
+            "Saved grouped backup {} inside '{}/{}'",
+            entry.filename, BACKUPS_FOLDER_NAME, group_folder_name
         ),
     })
 }
@@ -1006,29 +1365,51 @@ pub async fn drive_push_change(
     });
 
     let client = reqwest::Client::new();
-    let (mut token, folder_id) =
+    let (mut token, root_folder_id) =
         get_or_create_backups_folder_resilient(&app, &auth_state, &client).await?;
 
     let (manifest_file_id, mut manifest) =
-        fetch_manifest_in_folder_resilient(&app, &auth_state, &client, &mut token, &folder_id)
+        fetch_manifest_in_folder_resilient(&app, &auth_state, &client, &mut token, &root_folder_id)
             .await?;
 
-    let change_filename = build_unique_change_filename(
-        &manifest.change_history,
-        &change.entity,
-        &action_slug,
+    let (group_idx, group_folder_name, group_folder_id) = ensure_active_hourly_group(
+        &app,
+        &auth_state,
+        &client,
+        &mut token,
+        &root_folder_id,
+        &mut manifest,
         year,
         month,
         day,
         hour,
         minute,
+        epoch_secs,
+        &iso_timestamp,
+    )
+    .await?;
+
+    let existing_group_changes = manifest
+        .groups
+        .get(group_idx)
+        .map(|g| g.changes.as_slice())
+        .unwrap_or(&[]);
+
+    let change_filename = build_unique_change_filename(
+        existing_group_changes,
+        &change.entity,
+        &action_slug,
+        hour,
+        minute,
     );
 
+    let entity_slug = sanitize_slug(&change.entity, "record");
     let payload = serde_json::json!({
         "app": "RentFlow",
         "kind": "change_snapshot",
-        "version": "2.1.0",
-        "entity": sanitize_slug(&change.entity, "record"),
+        "version": "2.2.0",
+        "groupFolder": group_folder_name,
+        "entity": entity_slug,
         "table": change.table,
         "action": action_slug,
         "record_id": change.record_id,
@@ -1046,7 +1427,7 @@ pub async fn drive_push_change(
     let uploaded = match upload_new_file_in_folder(
         &client,
         &token,
-        &folder_id,
+        &group_folder_id,
         &change_filename,
         "application/octet-stream",
         encrypted_bytes.clone(),
@@ -1059,7 +1440,7 @@ pub async fn drive_push_change(
             upload_new_file_in_folder(
                 &client,
                 &token,
-                &folder_id,
+                &group_folder_id,
                 &change_filename,
                 "application/octet-stream",
                 encrypted_bytes,
@@ -1069,65 +1450,55 @@ pub async fn drive_push_change(
         Err(err) => return Err(err),
     };
 
-    manifest.change_history.insert(
-        0,
-        ChangeHistoryEntry {
-            filename: change_filename.clone(),
-            entity: sanitize_slug(&change.entity, "record"),
-            table: change.table,
-            action: action_slug,
-            record_id: change.record_id,
-            summary: change.summary,
-            date: iso_timestamp.clone(),
-            size: formatted_size,
-            size_bytes: Some(byte_len),
-            file_id: Some(uploaded.id.clone()),
-        },
-    );
+    let change_entry = ChangeHistoryEntry {
+        filename: change_filename.clone(),
+        entity: entity_slug,
+        table: change.table,
+        action: action_slug,
+        record_id: change.record_id,
+        summary: change.summary,
+        date: iso_timestamp.clone(),
+        size: formatted_size,
+        size_bytes: Some(byte_len),
+        file_id: Some(uploaded.id.clone()),
+        folder_name: Some(group_folder_name.clone()),
+        folder_id: Some(group_folder_id.clone()),
+    };
 
-    // Keep last 20 small changes and purge older files from Google Drive
+    if let Some(group) = manifest.groups.get_mut(group_idx) {
+        group.changes.insert(0, change_entry.clone());
+        group.updated_at = iso_timestamp.clone();
+    }
+
+    manifest.change_history.insert(0, change_entry);
     while manifest.change_history.len() > MAX_CHANGE_HISTORY_RETENTION {
-        if let Some(oldest) = manifest.change_history.pop() {
-            let oldest_fid = match oldest.file_id {
-                Some(fid) if !fid.is_empty() => Some(fid),
-                _ => find_file_in_folder(&client, &token, &folder_id, &oldest.filename)
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|f| f.id),
-            };
-            if let Some(fid) = oldest_fid {
-                match delete_drive_file(&client, &token, &fid).await {
-                    Ok(()) => {}
-                    Err(err) if err == "UNAUTHORIZED" => {
-                        token = refresh_google_access_token(Some(&app), &auth_state).await?;
-                        let _ = delete_drive_file(&client, &token, &fid).await;
-                    }
-                    Err(err) => eprintln!(
-                        "[RentFlow Drive] Warning: failed purging oldest change {}: {}",
-                        oldest.filename, err
-                    ),
-                }
-            }
-        }
+        let _ = manifest.change_history.pop();
     }
 
     manifest.changes_since_full_backup = manifest.changes_since_full_backup.saturating_add(1);
 
+    let group_missing_snapshot = manifest
+        .groups
+        .get(group_idx)
+        .map(|g| g.full_snapshot_file_id.is_none())
+        .unwrap_or(true);
     let elapsed_since_full = epoch_secs.saturating_sub(manifest.last_full_backup_epoch);
-    let should_trigger_full = manifest.changes_since_full_backup >= FULL_BACKUP_CHANGE_THRESHOLD
+    let should_trigger_full = group_missing_snapshot
+        || manifest.changes_since_full_backup >= FULL_BACKUP_CHANGE_THRESHOLD
         || manifest.last_full_backup_epoch <= 0
         || elapsed_since_full >= FULL_BACKUP_INTERVAL_SECS;
 
     let mut full_backup_filename: Option<String> = None;
     if should_trigger_full {
-        let (full_entry, _) = compile_and_upload_full_backup(
+        let (full_entry, _) = compile_and_upload_group_full_backup(
             &app,
             &auth_state,
             &db_state,
             &client,
             &mut token,
-            &folder_id,
+            group_idx,
+            &group_folder_name,
+            &group_folder_id,
             &effective_google_id,
             &mut manifest,
         )
@@ -1140,7 +1511,7 @@ pub async fn drive_push_change(
         &auth_state,
         &client,
         &mut token,
-        &folder_id,
+        &root_folder_id,
         manifest_file_id,
         &manifest,
     )
@@ -1152,22 +1523,19 @@ pub async fn drive_push_change(
         success: true,
         synced_at: iso_timestamp,
         file_id: Some(uploaded.id),
-        folder_id: Some(folder_id),
+        folder_id: Some(group_folder_id),
         filename: Some(change_filename.clone()),
-        snapshot_count: manifest.change_history.len(),
+        snapshot_count: manifest
+            .groups
+            .get(group_idx)
+            .map(|g| g.changes.len())
+            .unwrap_or(manifest.change_history.len()),
         full_backup_triggered: should_trigger_full,
         full_backup_filename,
-        message: if should_trigger_full {
-            format!(
-                "Saved change {} and compiled grouped full backup in '{}'",
-                change_filename, BACKUPS_FOLDER_NAME
-            )
-        } else {
-            format!(
-                "Saved change {} ({}/{} before next full backup)",
-                change_filename, manifest.changes_since_full_backup, FULL_BACKUP_CHANGE_THRESHOLD
-            )
-        },
+        message: format!(
+            "Saved change {} inside '{}/{}'",
+            change_filename, BACKUPS_FOLDER_NAME, group_folder_name
+        ),
     })
 }
 
@@ -1186,6 +1554,7 @@ pub async fn get_grouped_backup_list(
         return Ok(GroupedBackupList {
             full_backups: Vec::new(),
             change_history: Vec::new(),
+            groups: Vec::new(),
             changes_since_full_backup: 0,
             last_full_backup_at: None,
         });
@@ -1195,9 +1564,12 @@ pub async fn get_grouped_backup_list(
         fetch_manifest_in_folder_resilient(&app, &auth_state, &client, &mut token, &folder_id)
             .await?;
 
+    let groups = synthesize_legacy_groups(&manifest);
+
     Ok(GroupedBackupList {
         full_backups: manifest.full_backups,
         change_history: manifest.change_history,
+        groups,
         changes_since_full_backup: manifest.changes_since_full_backup,
         last_full_backup_at: manifest.last_full_backup_at,
     })
@@ -1212,9 +1584,55 @@ pub async fn get_backup_list(
     Ok(grouped.full_backups)
 }
 
+async fn restore_file_id_into_db(
+    app: &AppHandle,
+    auth_state: &AuthState,
+    db_state: &State<'_, DatabaseManager>,
+    client: &reqwest::Client,
+    token: &mut String,
+    google_id: &str,
+    file_id: &str,
+    display_name: &str,
+) -> Result<DrivePullResult, String> {
+    let bytes = match download_drive_file_bytes(client, token, file_id).await {
+        Ok(b) => b,
+        Err(err) if err == "UNAUTHORIZED" => {
+            *token = refresh_google_access_token(Some(app), auth_state).await?;
+            download_drive_file_bytes(client, token, file_id).await?
+        }
+        Err(err) => return Err(err),
+    };
+
+    if bytes.len() < 12 {
+        return Err(format!("Snapshot '{}' is empty or corrupted.", display_name));
+    }
+
+    let decrypted_str = decrypt_payload(&bytes, google_id)?;
+    let parsed: serde_json::Value = serde_json::from_str(&decrypted_str)
+        .map_err(|e| format!("Failed to parse decrypted snapshot JSON: {}", e))?;
+
+    let data_to_import = parsed.get("tables").or_else(|| parsed.get("data")).cloned();
+    let Some(data_obj) = data_to_import else {
+        return Ok(DrivePullResult {
+            restored: false,
+            filename: Some(display_name.to_string()),
+            message: "Snapshot contained no database tables.".to_string(),
+        });
+    };
+
+    db_import_all(data_obj, db_state.clone()).await?;
+
+    Ok(DrivePullResult {
+        restored: true,
+        filename: Some(display_name.to_string()),
+        message: format!("Successfully restored SQLite database from {}", display_name),
+    })
+}
+
 #[tauri::command]
 pub async fn restore_from_snapshot(
     filename: String,
+    folder_id: Option<String>,
     app: AppHandle,
     auth_state: State<'_, AuthState>,
     db_state: State<'_, DatabaseManager>,
@@ -1224,10 +1642,10 @@ pub async fn restore_from_snapshot(
     let google_id = get_authenticated_google_id(&auth_state)?;
     let client = reqwest::Client::new();
 
-    let (mut token, folder_id_opt) =
+    let (mut token, root_folder_id_opt) =
         find_backups_folder_resilient(&app, &auth_state, &client).await?;
 
-    let Some(folder_id) = folder_id_opt else {
+    let Some(root_folder_id) = root_folder_id_opt else {
         return Err(format!(
             "Folder '{}' was not found in your Google Drive.",
             BACKUPS_FOLDER_NAME
@@ -1235,22 +1653,34 @@ pub async fn restore_from_snapshot(
     };
 
     let (_manifest_fid, manifest) =
-        fetch_manifest_in_folder_resilient(&app, &auth_state, &client, &mut token, &folder_id)
+        fetch_manifest_in_folder_resilient(&app, &auth_state, &client, &mut token, &root_folder_id)
             .await?;
 
     let mut target_file_id = manifest
-        .full_backups
+        .groups
         .iter()
-        .find(|e| e.filename == filename)
-        .and_then(|e| e.file_id.clone());
+        .find(|g| {
+            g.full_snapshot_filename.as_deref() == Some(filename.as_str())
+                && (folder_id.is_none() || g.folder_id == folder_id)
+        })
+        .and_then(|g| g.full_snapshot_file_id.clone());
 
     if target_file_id.is_none() {
+        target_file_id = manifest
+            .full_backups
+            .iter()
+            .find(|e| e.filename == filename)
+            .and_then(|e| e.file_id.clone());
+    }
+
+    if target_file_id.is_none() {
+        let search_folder = folder_id.as_deref().unwrap_or(&root_folder_id);
         target_file_id =
-            match find_file_in_folder(&client, &token, &folder_id, &filename).await {
+            match find_file_in_folder(&client, &token, search_folder, &filename).await {
                 Ok(found) => found.map(|f| f.id),
                 Err(err) if err == "UNAUTHORIZED" => {
                     token = refresh_google_access_token(Some(&app), &auth_state).await?;
-                    find_file_in_folder(&client, &token, &folder_id, &filename)
+                    find_file_in_folder(&client, &token, search_folder, &filename)
                         .await?
                         .map(|f| f.id)
                 }
@@ -1265,47 +1695,122 @@ pub async fn restore_from_snapshot(
         ));
     };
 
-    let bytes = match download_drive_file_bytes(&client, &token, &fid).await {
-        Ok(b) => b,
-        Err(err) if err == "UNAUTHORIZED" => {
-            token = refresh_google_access_token(Some(&app), &auth_state).await?;
-            download_drive_file_bytes(&client, &token, &fid).await?
-        }
-        Err(err) => return Err(err),
-    };
+    restore_file_id_into_db(
+        &app,
+        &auth_state,
+        &db_state,
+        &client,
+        &mut token,
+        &google_id,
+        &fid,
+        &filename,
+    )
+    .await
+}
 
-    if bytes.len() < 12 {
-        return Err(format!("Snapshot '{}' is empty or corrupted.", filename));
+#[tauri::command]
+pub async fn restore_group_backup(
+    folder_name: String,
+    app: AppHandle,
+    auth_state: State<'_, AuthState>,
+    db_state: State<'_, DatabaseManager>,
+) -> Result<DrivePullResult, String> {
+    let trimmed = folder_name.trim();
+    if trimmed.is_empty() || trimmed.contains("..") || trimmed.contains('/') || trimmed.contains('\\') {
+        return Err("Invalid grouped backup folder name.".to_string());
     }
 
-    let decrypted_str = decrypt_payload(&bytes, &google_id)?;
-    let parsed: serde_json::Value = serde_json::from_str(&decrypted_str)
-        .map_err(|e| format!("Failed to parse decrypted snapshot JSON: {}", e))?;
+    let _sync_guard = auth_state.sync_lock.lock().await;
+    let google_id = get_authenticated_google_id(&auth_state)?;
+    let client = reqwest::Client::new();
 
-    let data_to_import = parsed.get("tables").or_else(|| parsed.get("data")).cloned();
-    let Some(data_obj) = data_to_import else {
-        return Ok(DrivePullResult {
-            restored: false,
-            filename: Some(filename),
-            message: "Snapshot contained no database tables.".to_string(),
-        });
+    let (mut token, root_folder_id_opt) =
+        find_backups_folder_resilient(&app, &auth_state, &client).await?;
+
+    let Some(root_folder_id) = root_folder_id_opt else {
+        return Err(format!(
+            "Folder '{}' was not found in your Google Drive.",
+            BACKUPS_FOLDER_NAME
+        ));
     };
 
-    db_import_all(data_obj, db_state.clone()).await?;
+    let (_manifest_fid, manifest) =
+        fetch_manifest_in_folder_resilient(&app, &auth_state, &client, &mut token, &root_folder_id)
+            .await?;
 
-    Ok(DrivePullResult {
-        restored: true,
-        filename: Some(filename.clone()),
-        message: format!(
-            "Successfully restored SQLite database from full backup {}",
-            filename
-        ),
-    })
+    let groups = synthesize_legacy_groups(&manifest);
+    let target_group = groups.into_iter().find(|g| g.folder_name == trimmed);
+
+    let Some(group) = target_group else {
+        return Err(format!(
+            "Grouped backup '{}' was not found in '{}'.",
+            trimmed, BACKUPS_FOLDER_NAME
+        ));
+    };
+
+    if let Some(fid) = group.full_snapshot_file_id.clone() {
+        let display = group
+            .full_snapshot_filename
+            .clone()
+            .unwrap_or_else(|| trimmed.to_string());
+        return restore_file_id_into_db(
+            &app,
+            &auth_state,
+            &db_state,
+            &client,
+            &mut token,
+            &google_id,
+            &fid,
+            &display,
+        )
+        .await;
+    }
+
+    if let (Some(group_fid), Some(snap_name)) =
+        (group.folder_id.as_deref(), group.full_snapshot_filename.as_deref())
+    {
+        if let Ok(Some(item)) = find_file_in_folder(&client, &token, group_fid, snap_name).await {
+            return restore_file_id_into_db(
+                &app,
+                &auth_state,
+                &db_state,
+                &client,
+                &mut token,
+                &google_id,
+                &item.id,
+                snap_name,
+            )
+            .await;
+        }
+    }
+
+    // Legacy fallback: find latest full backup whose timestamp falls on the same date prefix
+    if let Some(latest_full) = manifest.full_backups.first() {
+        if let Some(fid) = latest_full.file_id.as_deref() {
+            return restore_file_id_into_db(
+                &app,
+                &auth_state,
+                &db_state,
+                &client,
+                &mut token,
+                &google_id,
+                fid,
+                &latest_full.filename,
+            )
+            .await;
+        }
+    }
+
+    Err(format!(
+        "Grouped backup '{}' does not have a compiled full snapshot yet.",
+        trimmed
+    ))
 }
 
 #[tauri::command]
 pub async fn revert_change_snapshot(
     filename: String,
+    folder_id: Option<String>,
     app: AppHandle,
     auth_state: State<'_, AuthState>,
     db_state: State<'_, DatabaseManager>,
@@ -1315,10 +1820,10 @@ pub async fn revert_change_snapshot(
     let google_id = get_authenticated_google_id(&auth_state)?;
     let client = reqwest::Client::new();
 
-    let (mut token, folder_id_opt) =
+    let (mut token, root_folder_id_opt) =
         find_backups_folder_resilient(&app, &auth_state, &client).await?;
 
-    let Some(folder_id) = folder_id_opt else {
+    let Some(root_folder_id) = root_folder_id_opt else {
         return Err(format!(
             "Folder '{}' was not found in your Google Drive.",
             BACKUPS_FOLDER_NAME
@@ -1326,22 +1831,44 @@ pub async fn revert_change_snapshot(
     };
 
     let (_manifest_fid, manifest) =
-        fetch_manifest_in_folder_resilient(&app, &auth_state, &client, &mut token, &folder_id)
+        fetch_manifest_in_folder_resilient(&app, &auth_state, &client, &mut token, &root_folder_id)
             .await?;
 
-    let mut target_file_id = manifest
-        .change_history
-        .iter()
-        .find(|e| e.filename == filename)
-        .and_then(|e| e.file_id.clone());
+    let mut target_file_id: Option<String> = None;
+    let mut resolved_folder_id = folder_id.clone();
+
+    for group in &manifest.groups {
+        if let Some(ref fid_filter) = folder_id {
+            if group.folder_id.as_deref() != Some(fid_filter.as_str()) {
+                continue;
+            }
+        }
+        if let Some(entry) = group.changes.iter().find(|c| c.filename == filename) {
+            target_file_id = entry.file_id.clone();
+            if resolved_folder_id.is_none() {
+                resolved_folder_id = entry.folder_id.clone().or_else(|| group.folder_id.clone());
+            }
+            break;
+        }
+    }
 
     if target_file_id.is_none() {
+        if let Some(entry) = manifest.change_history.iter().find(|e| e.filename == filename) {
+            target_file_id = entry.file_id.clone();
+            if resolved_folder_id.is_none() {
+                resolved_folder_id = entry.folder_id.clone();
+            }
+        }
+    }
+
+    if target_file_id.is_none() {
+        let search_folder = resolved_folder_id.as_deref().unwrap_or(&root_folder_id);
         target_file_id =
-            match find_file_in_folder(&client, &token, &folder_id, &filename).await {
+            match find_file_in_folder(&client, &token, search_folder, &filename).await {
                 Ok(found) => found.map(|f| f.id),
                 Err(err) if err == "UNAUTHORIZED" => {
                     token = refresh_google_access_token(Some(&app), &auth_state).await?;
-                    find_file_in_folder(&client, &token, &folder_id, &filename)
+                    find_file_in_folder(&client, &token, search_folder, &filename)
                         .await?
                         .map(|f| f.id)
                 }
@@ -1422,5 +1949,12 @@ pub async fn drive_pull_backup(
         });
     };
 
-    restore_from_snapshot(latest.filename, app, auth_state, db_state).await
+    restore_from_snapshot(
+        latest.filename,
+        latest.folder_id,
+        app,
+        auth_state,
+        db_state,
+    )
+    .await
 }

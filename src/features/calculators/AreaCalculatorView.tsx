@@ -71,7 +71,7 @@ export const AreaCalculatorView: React.FC = () => {
             <select
               value={fromUnit}
               onChange={(e) => setFromUnit(e.target.value as AreaUnit)}
-              className="w-full h-9 rounded-[6px] border border-[var(--border)] bg-[var(--bg)] px-3 text-xs text-[var(--text)] focus-ring"
+              className="w-full h-9 rounded-[6px] border border-[var(--border-strong)] bg-[var(--bg-surface)] px-3 text-xs text-[var(--text-primary)] focus-ring cursor-pointer"
             >
               {unitKeys.map((u) => (
                 <option key={u} value={u}>
@@ -101,7 +101,7 @@ export const AreaCalculatorView: React.FC = () => {
             <select
               value={toUnit}
               onChange={(e) => setToUnit(e.target.value as AreaUnit)}
-              className="w-full h-9 rounded-[6px] border border-[var(--border)] bg-[var(--bg)] px-3 text-xs text-[var(--text)] focus-ring"
+              className="w-full h-9 rounded-[6px] border border-[var(--border-strong)] bg-[var(--bg-surface)] px-3 text-xs text-[var(--text-primary)] focus-ring cursor-pointer"
             >
               {unitKeys.map((u) => (
                 <option key={u} value={u}>

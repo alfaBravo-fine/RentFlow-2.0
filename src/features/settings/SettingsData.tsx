@@ -32,7 +32,12 @@ import {
   tauriRestartApp,
 } from '../../lib/tauri/bridge';
 import { backupToDrive } from '../../lib/googleDriveService';
-import { exportAllDataToExcel, updateExistingExcel } from '../../lib/excelExport';
+import {
+  exportAllDataToExcel,
+  MASTER_EXCEL_FILENAME,
+  syncMasterExcelFile,
+  updateExistingExcel,
+} from '../../lib/excelExport';
 import { useUIStore } from '../../stores/uiStore';
 import { useAppSettingsStore } from '../../stores/appSettingsStore';
 import { useAuthStore } from '../../stores/authStore';
@@ -81,6 +86,11 @@ export const SettingsData: React.FC = () => {
   const setAutoSyncEnabled = useAppSettingsStore((s) => s.setAutoSyncEnabled);
   const exportDestination = useAppSettingsStore((s) => s.exportDestination);
   const setExportDestination = useAppSettingsStore((s) => s.setExportDestination);
+  const masterExcelFolder = useAppSettingsStore((s) => s.masterExcelFolder);
+  const setMasterExcelFolder = useAppSettingsStore((s) => s.setMasterExcelFolder);
+  const masterExcelAutoSync = useAppSettingsStore((s) => s.masterExcelAutoSync);
+  const setMasterExcelAutoSync = useAppSettingsStore((s) => s.setMasterExcelAutoSync);
+  const lastMasterExcelSync = useAppSettingsStore((s) => s.lastMasterExcelSync);
 
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
   const [backupDestinationPath, setBackupDestinationPath] = useState('');
@@ -91,6 +101,7 @@ export const SettingsData: React.FC = () => {
   const [isImportingCsv, setIsImportingCsv] = useState(false);
   const [isExportingExcel, setIsExportingExcel] = useState(false);
   const [isUpdatingExcel, setIsUpdatingExcel] = useState(false);
+  const [isSyncingMasterExcel, setIsSyncingMasterExcel] = useState(false);
   const [isFactoryResetOpen, setIsFactoryResetOpen] = useState(false);
   const [isFactoryResetting, setIsFactoryResetting] = useState(false);
   const [isWipeDataConfirmOpen, setIsWipeDataConfirmOpen] = useState(false);
@@ -219,6 +230,91 @@ export const SettingsData: React.FC = () => {
       showToast({ type: 'error', message: err?.message || 'Database integrity check failed.' });
     } finally {
       setIsHealthChecking(false);
+    }
+  };
+
+  const handleSaveMasterExcelFolder = (folder: string) => {
+    setMasterExcelFolder(folder);
+    void databaseService.saveSetting('masterExcelFolder', folder);
+  };
+
+  const handlePickMasterExcelFolder = async () => {
+    try {
+      const picked = await open({
+        directory: true,
+        multiple: false,
+        defaultPath: masterExcelFolder || exportDestination || appDataPath || undefined,
+        title: `Select Folder for ${MASTER_EXCEL_FILENAME}`,
+      });
+      if (typeof picked === 'string' && picked.trim()) {
+        const nextFolder = picked.trim();
+        handleSaveMasterExcelFolder(nextFolder);
+        showToast({
+          type: 'success',
+          message: `Live Excel Master File folder set to "${nextFolder}".`,
+        });
+      }
+    } catch (err: unknown) {
+      const msg =
+        typeof err === 'string'
+          ? err
+          : (err as { message?: string })?.message || 'Could not open folder picker.';
+      showToast({ type: 'error', message: msg });
+    }
+  };
+
+  const handleToggleMasterExcelAutoSync = () => {
+    const nextState = !masterExcelAutoSync;
+    setMasterExcelAutoSync(nextState);
+    void databaseService.saveSetting('masterExcelAutoSync', nextState);
+    showToast({
+      type: 'info',
+      message: nextState
+        ? 'Live Excel Master File auto-sync enabled.'
+        : 'Live Excel Master File auto-sync paused.',
+    });
+  };
+
+  const handleForceUpdateMasterExcel = async () => {
+    setIsSyncingMasterExcel(true);
+    try {
+      let targetFolder = masterExcelFolder.trim();
+      const isTauriDesktop =
+        typeof window !== 'undefined' && Boolean((window as any).__TAURI_INTERNALS__);
+
+      if (isTauriDesktop && !targetFolder) {
+        const picked = await open({
+          directory: true,
+          multiple: false,
+          defaultPath: exportDestination || appDataPath || undefined,
+          title: `Select Folder for ${MASTER_EXCEL_FILENAME}`,
+        });
+        if (typeof picked === 'string' && picked.trim()) {
+          targetFolder = picked.trim();
+          handleSaveMasterExcelFolder(targetFolder);
+        } else {
+          targetFolder = appDataPath || exportDestination || '';
+        }
+      }
+
+      const result = await syncMasterExcelFile({
+        pack,
+        targetFolder: targetFolder || undefined,
+      });
+
+      showToast({
+        type: 'success',
+        message: result.savedPath
+          ? `Updated "${result.savedPath}" (${result.totalRecords} records across ${result.sheetCount} tabs).`
+          : `Generated "${result.fileName}" (${result.totalRecords} records across ${result.sheetCount} tabs).`,
+      });
+    } catch (err: any) {
+      showToast({
+        type: 'error',
+        message: err?.message || 'Could not update Live Excel Master File.',
+      });
+    } finally {
+      setIsSyncingMasterExcel(false);
     }
   };
 
@@ -355,7 +451,7 @@ export const SettingsData: React.FC = () => {
 
             db.insertItem<Property>('properties', {
               id: generateUUID(),
-              org_id: 'org_demo_1',
+              org_id: 'default_org',
               name: propName,
               address_line1: propAddr,
               address_line2: null,
@@ -389,7 +485,7 @@ export const SettingsData: React.FC = () => {
 
             db.insertItem<Tenant>('tenants', {
               id: generateUUID(),
-              org_id: 'org_demo_1',
+              org_id: 'default_org',
               name: tName,
               email: cols[emailIdx] || '',
               phone: tPhone,
@@ -692,6 +788,92 @@ export const SettingsData: React.FC = () => {
             className="w-full sm:w-auto h-10 px-4 shrink-0 cursor-pointer"
           >
             Browse Folder
+          </Button>
+        </div>
+      </Card>
+
+      {/* Live Excel Master File */}
+      <Card className="space-y-4">
+        <CardHeader className="mb-2">
+          <div>
+            <div className="flex items-center gap-2">
+              <FileSpreadsheet className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+              <CardTitle>Live Excel Master File</CardTitle>
+            </div>
+            <CardDescription>
+              Maintains a single live workbook ({MASTER_EXCEL_FILENAME}) that stays updated automatically whenever portfolio records change.
+            </CardDescription>
+          </div>
+        </CardHeader>
+
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 pt-1">
+          <div className="flex-1 min-w-0">
+            <Input
+              value={masterExcelFolder}
+              onChange={(e) => handleSaveMasterExcelFolder(e.target.value)}
+              placeholder="Select a folder where RentFlow_Master_Data.xlsx will live"
+              aria-label="Live Excel Master File Folder"
+              className="font-mono text-xs"
+            />
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void handlePickMasterExcelFolder()}
+            className="w-full sm:w-auto h-10 px-4 gap-2 shrink-0 cursor-pointer"
+          >
+            <Folder className="w-4 h-4 text-[var(--accent)]" />
+            <span>Select Folder</span>
+          </Button>
+        </div>
+
+        <div className="p-4 rounded-xl bg-[var(--bg-surface-sunken)] border border-[var(--border-subtle)] flex items-center justify-between gap-4">
+          <div>
+            <div className="text-xs font-semibold text-[var(--text-primary)]">
+              Auto-Sync Master Workbook on Data Changes
+            </div>
+            <div className="text-[11px] text-[var(--text-secondary)] mt-0.5">
+              Automatically overwrites {MASTER_EXCEL_FILENAME} whenever you add, edit, or delete a Property, Tenant, Lease, Invoice, Payment, or Expense.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleToggleMasterExcelAutoSync}
+            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-ring ${
+              masterExcelAutoSync ? 'bg-indigo-600' : 'bg-[var(--border-strong)]'
+            }`}
+            role="switch"
+            aria-checked={masterExcelAutoSync}
+            aria-label="Auto-Sync Master Workbook"
+          >
+            <span
+              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                masterExcelAutoSync ? 'translate-x-5' : 'translate-x-0'
+              }`}
+            />
+          </button>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+          <div className="text-[11px] text-[var(--text-secondary)] font-mono tabular-nums">
+            {lastMasterExcelSync
+              ? `Last synced: ${new Date(lastMasterExcelSync).toLocaleString()}`
+              : masterExcelFolder
+              ? `Target: ${masterExcelFolder}`
+              : 'No folder selected yet'}
+          </div>
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            onClick={() => void handleForceUpdateMasterExcel()}
+            disabled={isSyncingMasterExcel}
+            className="gap-2 shrink-0"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncingMasterExcel ? 'animate-spin' : ''}`} />
+            <span>
+              {isSyncingMasterExcel ? 'Updating Master File...' : 'Force Update Master File Now'}
+            </span>
           </Button>
         </div>
       </Card>

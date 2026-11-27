@@ -13,15 +13,16 @@ use db::{
     db_insert_item, db_update_item, delete_expense, delete_invoice, delete_lease,
     delete_maintenance_request, delete_property, delete_tenant, delete_unit, delete_vendor,
     get_app_data_path, get_credits, get_data_path, get_expenses, get_invoices, get_leases,
-    get_maintenance_requests, get_payments, get_properties, get_settings, get_tenants, get_units,
-    get_vendors, migrate_database, record_deduction_transaction, record_payment_transaction,
-    resolve_data_dir, save_setting, save_settings, set_data_path, update_expense, update_invoice,
-    update_lease, update_maintenance_request, update_property, update_tenant, update_unit,
-    update_vendor, wipe_all_local_data, DatabaseManager,
+    get_maintenance_requests, get_monthly_income_vs_expenses, get_payments, get_properties,
+    get_settings, get_tenants, get_units, get_vendors, migrate_database,
+    record_deduction_transaction, record_payment_transaction, resolve_data_dir, save_setting,
+    save_settings, set_data_path, update_expense, update_invoice, update_lease,
+    update_maintenance_request, update_property, update_tenant, update_unit, update_vendor,
+    wipe_all_local_data, DatabaseManager,
 };
 use drive_sync::{
     drive_pull_backup, drive_push_backup, drive_push_change, get_backup_list,
-    get_grouped_backup_list, restore_from_snapshot, revert_change_snapshot,
+    get_grouped_backup_list, restore_from_snapshot, restore_group_backup, revert_change_snapshot,
 };
 use auth::{
     cancel_google_login, google_get_current_user, google_login, google_oauth,
@@ -151,6 +152,8 @@ fn main() {
             // Credits CRUD
             get_credits,
             add_credit,
+            // Dashboard SQL Aggregations
+            get_monthly_income_vs_expenses,
             // Settings & Data Path
             get_settings,
             save_setting,
@@ -172,6 +175,7 @@ fn main() {
             get_backup_list,
             get_grouped_backup_list,
             restore_from_snapshot,
+            restore_group_backup,
             revert_change_snapshot,
             // App Lifecycle
             restart_app,

@@ -34,6 +34,8 @@ import {
 
 type MapLayerType = 'streets' | 'satellite' | 'terrain';
 
+let hasWarnedMissingMapTilerKey = false;
+
 function getMapTilerApiKey(): string {
   const raw = import.meta.env.VITE_MAPTILER_API_KEY;
   const trimmed = typeof raw === 'string' ? raw.trim() : '';
@@ -58,7 +60,14 @@ function getMapStyle(layer: MapLayerType): string | maplibregl.StyleSpecificatio
     }
   }
 
-  // Silent OpenStreetMap fallback when MapTiler key is omitted
+  if (!hasWarnedMissingMapTilerKey) {
+    hasWarnedMissingMapTilerKey = true;
+    console.warn(
+      '[MapView] VITE_MAPTILER_API_KEY is missing; falling back to OpenStreetMap tiles.'
+    );
+  }
+
+  // Graceful OpenStreetMap fallback when MapTiler key is omitted
   return {
     version: 8,
     sources: {
@@ -529,7 +538,7 @@ export const MapView: React.FC = () => {
     if (isCreatingNew) {
       const created = db.insertItem<Property>('properties', {
         id: generateUUID(),
-        org_id: 'org_demo_1',
+        org_id: 'default_org',
         name: formName.trim(),
         address_line1: formAddress.trim(),
         address: formAddress.trim(),
@@ -636,8 +645,8 @@ export const MapView: React.FC = () => {
       {/* Edge-to-Edge Map Canvas */}
       <div ref={mapContainerRef} className="w-full h-full" />
 
-      {/* Floating Top-Left Search & Filter Card (Rounded Minimalism) */}
-      <div className="absolute top-4 left-4 z-20 w-[340px] sm:w-[420px] max-w-[calc(100%-2rem)] rounded-2xl bg-[var(--bg-surface)]/95 backdrop-blur-md border border-[var(--border-strong)] p-4 modal-shadow space-y-3">
+      {/* Floating Top-Left Search & Filter Card (Solid Opaque) */}
+      <div className="absolute top-4 left-4 z-20 w-[340px] sm:w-[420px] max-w-[calc(100%-2rem)] rounded-2xl solid-menu-surface bg-[var(--bg-surface)] p-4 space-y-3">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
             <div className="w-7 h-7 rounded-xl bg-[var(--accent)] text-white flex items-center justify-center shrink-0">
@@ -716,9 +725,15 @@ export const MapView: React.FC = () => {
         </p>
       </div>
 
-      {/* 400px Right Slide-Over Panel (Mac/Arc style) */}
+      {/* 400px Right Slide-Over Panel (Mac/Arc style) with Frosted Blur Backdrop */}
       {isSlideOverOpen && (
-        <div className="absolute top-0 right-0 bottom-0 w-full sm:w-[400px] bg-[var(--bg-surface)] border-l border-[var(--border-subtle)] modal-shadow z-30 flex flex-col justify-between overflow-y-auto animate-in slide-in-from-right duration-200">
+        <>
+          <div
+            onClick={handleCloseSlideOver}
+            className="menu-backdrop-blur !absolute inset-0 z-[25] animate-in fade-in duration-150"
+            aria-hidden="true"
+          />
+          <div className="absolute top-0 right-0 bottom-0 w-full sm:w-[400px] solid-menu-surface bg-[var(--bg-surface)] border-l border-[var(--border-strong)] z-30 flex flex-col justify-between overflow-y-auto animate-in slide-in-from-right duration-200">
           {/* Header */}
           <div className="p-5 border-b border-[var(--border-subtle)] flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -937,6 +952,7 @@ export const MapView: React.FC = () => {
             )}
           </div>
         </div>
+        </>
       )}
 
       {/* Delete Confirmation Modal */}

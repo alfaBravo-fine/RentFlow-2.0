@@ -1,6 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { exportToExcel, exportAllDataToExcel, updateExistingExcel } from '../../src/lib/excelExport';
+import {
+  exportToExcel,
+  exportAllDataToExcel,
+  updateExistingExcel,
+  syncMasterExcelFile,
+  MASTER_EXCEL_FILENAME,
+} from '../../src/lib/excelExport';
 import { db } from '../../src/db/client';
+import { getCountryPack } from '../../src/countries/resolver';
 import {
   Property,
   Unit,
@@ -335,5 +342,29 @@ describe('ExcelJS Multi-Sheet Export Tests', () => {
     // Check newly appended row has thin borders
     const saraRow = tenantsWs.getRow(tenantsWs.rowCount);
     expect(saraRow.getCell(1).border?.top?.style).toBe('thin');
+  });
+
+  it('syncMasterExcelFile generates RentFlow_Master_Data.xlsx with indigo #4F46E5 bold white headers, thin borders, currency format, and auto-fit columns', async () => {
+    const result = await syncMasterExcelFile({ pack: getCountryPack('PK'), silentDownload: true });
+    expect(result.fileName).toBe(MASTER_EXCEL_FILENAME);
+    expect(result.fileName).toBe('RentFlow_Master_Data.xlsx');
+    expect(result.sheetCount).toBe(9);
+    expect(result.workbook).toBeDefined();
+
+    const wb = result.workbook!;
+    const unitsWs = wb.getWorksheet('Units')!;
+    const headerCell = unitsWs.getRow(1).getCell(1);
+    expect(headerCell.font?.bold).toBe(true);
+    expect(headerCell.font?.color?.argb).toBe('FFFFFFFF');
+    expect((headerCell.fill as any)?.fgColor?.argb).toBe('FF4F46E5');
+    expect(headerCell.border?.top?.style).toBe('thin');
+
+    const rentCell = unitsWs.getRow(2).getCell(4);
+    expect(rentCell.numFmt).toContain('Rs.');
+    expect(rentCell.border?.bottom?.style).toBe('thin');
+
+    unitsWs.columns.forEach((col) => {
+      expect(col.width).toBeGreaterThanOrEqual(12);
+    });
   });
 });
