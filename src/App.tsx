@@ -14,7 +14,6 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { KeyboardShortcutsModal } from './components/layout/KeyboardShortcutsModal';
 import { PrintProvider } from './components/print/PrintContext';
 import { SplashScreen } from './components/common/SplashScreen';
-import { AppContextMenu } from './components/common/ContextMenu';
 import { DATA_PATH_STORAGE_KEY } from './components/SetupWizard';
 import { ModeSelector } from './components/ModeSelector';
 import { StorageSelector } from './components/StorageSelector';
@@ -238,6 +237,44 @@ export default function App() {
     return localStorage.getItem(DATA_PATH_STORAGE_KEY);
   });
 
+  // Enforce native desktop feel: disable default right-click menu and browser shortcuts
+  useEffect(() => {
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const key = e.key.toLowerCase();
+      const hasModifier = e.ctrlKey || e.metaKey;
+
+      // Disable F5 refresh, F3 browser find, and F12 devtools
+      if (e.key === 'F5' || e.key === 'F3' || e.key === 'F12') {
+        e.preventDefault();
+        return;
+      }
+
+      if (hasModifier) {
+        // Block browser Print (Ctrl+P), Save (Ctrl+S), Reload (Ctrl+R), View Source (Ctrl+U), Find (Ctrl+F/G)
+        if (key === 'p' || key === 's' || key === 'r' || key === 'u' || key === 'f' || key === 'g') {
+          e.preventDefault();
+          return;
+        }
+
+        // Block browser DevTools shortcuts (Ctrl+Shift+I / J / C)
+        if (e.shiftKey && (key === 'i' || key === 'j' || key === 'c')) {
+          e.preventDefault();
+        }
+      }
+    };
+
+    document.addEventListener('contextmenu', handleContextMenu);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('contextmenu', handleContextMenu);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
+
   return (
     <MotionConfig reducedMotion="user">
       <HashRouter>
@@ -257,7 +294,6 @@ export default function App() {
                   </div>
                 </PrintProvider>
               </AuthProvider>
-              <AppContextMenu />
             </ToastProvider>
           </ThemeProvider>
         </AppErrorBoundary>

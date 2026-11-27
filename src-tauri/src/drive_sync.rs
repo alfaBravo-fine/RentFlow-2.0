@@ -415,17 +415,15 @@ async fn get_or_create_backups_folder_resilient(
     auth_state: &AuthState,
     client: &reqwest::Client,
 ) -> Result<(String, String), String> {
+    let initial_token = get_valid_access_token(Some(app), auth_state).await?;
     let (mut token, existing_id) = match find_folder_by_name(
         client,
-        &get_valid_access_token(Some(app), auth_state).await?,
+        &initial_token,
         BACKUPS_FOLDER_NAME,
     )
     .await
     {
-        Ok(folder) => (
-            get_valid_access_token(Some(app), auth_state).await?,
-            folder.map(|f| f.id),
-        ),
+        Ok(folder) => (initial_token, folder.map(|f| f.id)),
         Err(err) if err == "UNAUTHORIZED" => {
             let refreshed = refresh_google_access_token(Some(app), auth_state).await?;
             let folder = find_folder_by_name(client, &refreshed, BACKUPS_FOLDER_NAME).await?;
@@ -1222,6 +1220,7 @@ pub async fn restore_from_snapshot(
     db_state: State<'_, DatabaseManager>,
 ) -> Result<DrivePullResult, String> {
     validate_snapshot_filename(&filename)?;
+    let _sync_guard = auth_state.sync_lock.lock().await;
     let google_id = get_authenticated_google_id(&auth_state)?;
     let client = reqwest::Client::new();
 
@@ -1312,6 +1311,7 @@ pub async fn revert_change_snapshot(
     db_state: State<'_, DatabaseManager>,
 ) -> Result<DrivePullResult, String> {
     validate_snapshot_filename(&filename)?;
+    let _sync_guard = auth_state.sync_lock.lock().await;
     let google_id = get_authenticated_google_id(&auth_state)?;
     let client = reqwest::Client::new();
 

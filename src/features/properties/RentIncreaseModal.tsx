@@ -16,7 +16,6 @@ import {
   CheckCircle2,
   Calendar,
   Clock,
-  ArrowUpDown,
   Plus,
 } from '../../components/icons';
 

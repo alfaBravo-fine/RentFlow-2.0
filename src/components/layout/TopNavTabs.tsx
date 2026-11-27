@@ -4,7 +4,6 @@ import { motion } from 'motion/react';
 import { useTheme } from '../theme/ThemeProvider';
 import { useUIStore } from '../../stores/uiStore';
 import { useAuthStore } from '../../stores/authStore';
-import { useToast } from '../toast/ToastContext';
 import { CommandPalette } from './CommandPalette';
 import { QuickCopyPanel } from './QuickCopyPanel';
 import { Logo } from '../Logo';

@@ -7,24 +7,12 @@ import { exportAllDataToExcel, updateExistingExcel } from '../../lib/excelExport
 import { useToast } from '../toast/ToastContext';
 import {
   FileSpreadsheet,
-  Download,
   Upload,
-  RefreshCw,
   Sun,
   Moon,
   Plus,
-  Building2,
-  Users,
   Receipt,
-  Wrench,
   Calendar,
-  FileText,
-  DollarSign,
-  Settings,
-  HardHat,
-  Folder,
-  BarChart3,
-  Globe,
   LayoutGrid,
 } from '../icons';
 

@@ -17,17 +17,10 @@ import {
   Building2,
   Plus,
   DoorOpen,
-  Users,
   MapPin,
   Trash2,
   Pencil,
-  Copy,
-  ExternalLink,
-  Layers,
-  History,
   TrendingUp,
-  MoreVertical,
-  CheckCircle2,
   LayoutGrid,
   List,
   Eye,
@@ -336,7 +329,6 @@ export const PropertiesView: React.FC = () => {
   const propUnits = activeProp ? units.filter((u) => u.property_id === activeProp.id) : [];
   const occupiedCount = propUnits.filter(isUnitOccupied).length;
   const occupancyPct = propUnits.length > 0 ? Math.round((occupiedCount / propUnits.length) * 100) : 0;
-  const totalRentMinor = propUnits.reduce((acc, u) => acc + (isUnitOccupied(u) ? u.rent_minor : 0), 0);
 
   return (
     <div className="space-y-8">

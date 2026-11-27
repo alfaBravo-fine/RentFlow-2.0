@@ -139,15 +139,35 @@ fn query_item_by_id(conn: &Connection, table_name: &str, id: &str) -> Result<Opt
     }
 }
 
+fn get_table_columns(
+    conn: &Connection,
+    table_name: &str,
+) -> Result<std::collections::HashSet<String>, String> {
+    validate_table_name(table_name)?;
+    let pragma_sql = format!("PRAGMA table_info({});", table_name);
+    let mut stmt = conn.prepare(&pragma_sql).map_err(|e| e.to_string())?;
+    let cols = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| e.to_string())?;
+    let mut set = std::collections::HashSet::new();
+    for col in cols {
+        if let Ok(name) = col {
+            set.insert(name);
+        }
+    }
+    Ok(set)
+}
+
 fn insert_json_into_conn(conn: &Connection, table_name: &str, item: &Value) -> Result<Value, String> {
     validate_table_name(table_name)?;
     let obj = item.as_object().ok_or("Item must be a JSON object")?;
+    let valid_columns = get_table_columns(conn, table_name)?;
 
     let mut keys: Vec<String> = Vec::new();
     let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
     for (raw_key, val) in obj.iter() {
-        if raw_key == "deletedAt" {
+        if raw_key == "deletedAt" || (!valid_columns.is_empty() && !valid_columns.contains(raw_key)) {
             continue;
         }
         validate_column_name(raw_key)?;
@@ -169,6 +189,10 @@ fn insert_json_into_conn(conn: &Connection, table_name: &str, item: &Value) -> R
             Value::Array(_) | Value::Object(_) => Box::new(val.to_string()),
         };
         params_vec.push(boxed);
+    }
+
+    if keys.is_empty() {
+        return Err(format!("No valid columns supplied for table '{}'", table_name));
     }
 
     let placeholders: Vec<&str> = keys.iter().map(|_| "?").collect();
@@ -496,6 +520,7 @@ impl DatabaseManager {
                 currency_code TEXT NOT NULL DEFAULT 'USD',
                 status TEXT NOT NULL DEFAULT 'unpaid',
                 voided_reason TEXT,
+                line_items_json TEXT,
                 updated_at INTEGER NOT NULL,
                 device_id TEXT NOT NULL,
                 deleted_at INTEGER
@@ -745,6 +770,7 @@ impl DatabaseManager {
             "ALTER TABLE credits ADD COLUMN source_payment_id TEXT;",
             "ALTER TABLE credits ADD COLUMN status TEXT DEFAULT 'active';",
             "ALTER TABLE credits ADD COLUMN created_at INTEGER DEFAULT 0;",
+            "ALTER TABLE invoices ADD COLUMN line_items_json TEXT;",
             "ALTER TABLE app_settings ADD COLUMN deleted_at INTEGER;",
         ];
         for stmt in alter_statements {
@@ -822,12 +848,13 @@ pub async fn db_update_item(
     validate_table_name(&table_name)?;
     let obj = updates.as_object().ok_or("Updates must be a JSON object")?;
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let valid_columns = get_table_columns(&conn, &table_name)?;
 
     let mut set_clauses: Vec<String> = Vec::new();
     let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
     for (k, val) in obj.iter() {
-        if k == "deletedAt" {
+        if k == "deletedAt" || (!valid_columns.is_empty() && !valid_columns.contains(k)) {
             continue;
         }
         validate_column_name(k)?;

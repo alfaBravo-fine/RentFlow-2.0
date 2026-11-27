@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { db } from '../../db/client';
-import { DocumentVaultItem, Property, Tenant, Lease } from '../../db/schema';
+import { DocumentVaultItem, Property, Tenant } from '../../db/schema';
 import { generateUUID } from '../../lib/uuid';
 import { useToast } from '../../components/toast/ToastContext';
-import { Card, CardHeader, CardTitle } from '../../components/ui/Card';
+import { Card } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Input, Select } from '../../components/ui/Input';
@@ -12,14 +12,11 @@ import {
   FileText,
   Plus,
   Calendar,
-  AlertCircle,
   Paperclip,
   Trash2,
   Pencil,
   Search,
-  Download,
   Eye,
-  ShieldCheck,
   Building2,
   Users,
 } from '../../components/icons';

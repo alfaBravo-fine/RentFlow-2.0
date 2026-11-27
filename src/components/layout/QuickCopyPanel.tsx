@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { db } from '../../db/client';
-import { Property, Tenant, Lease, Unit } from '../../db/schema';
-import { Copy, Check, Building2, Users, MapPin, Phone, Mail, X } from '../icons';
+import { Property, Tenant } from '../../db/schema';
+import { Copy, Check, Building2, Users, MapPin, Phone, X } from '../icons';
 
 export interface QuickCopyPanelProps {
   isOpen: boolean;
@@ -15,8 +15,6 @@ export const QuickCopyPanel: React.FC<QuickCopyPanelProps> = ({ isOpen, onClose 
 
   const properties = db.getTable<Property>('properties');
   const tenants = db.getTable<Tenant>('tenants');
-  const leases = db.getTable<Lease>('leases');
-  const units = db.getTable<Unit>('units');
 
   const handleCopy = (text: string, label: string) => {
     navigator.clipboard.writeText(text);

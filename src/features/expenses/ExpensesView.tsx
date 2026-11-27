@@ -5,25 +5,18 @@ import { usePack } from '../../countries/usePack';
 import { formatMoney, parseMajorToMinor, minorToMajorNumber } from '../../lib/money';
 import { generateUUID } from '../../lib/uuid';
 import { useToast } from '../../components/toast/ToastContext';
-import { Card, CardHeader, CardTitle } from '../../components/ui/Card';
+import { Card } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Input, Select } from '../../components/ui/Input';
 import { Modal } from '../../components/ui/Modal';
 import {
-  Banknote,
   Plus,
-  Calendar,
   Pencil,
   Trash2,
   Paperclip,
-  Upload,
-  HardHat,
-  Building2,
   FileSpreadsheet,
   Search,
-  Eye,
-  RefreshCw,
 } from '../../components/icons';
 import { BankReconciliationModal } from './BankReconciliationModal';
 

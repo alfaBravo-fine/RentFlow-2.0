@@ -17,8 +17,6 @@ import { formatMoney } from '../../lib/money';
 import { getUnitDisplayName } from '../../lib/formatNames';
 import { useAppSettingsStore, MapPositionState } from '../../stores/appSettingsStore';
 import { useToast } from '../../components/toast/ToastContext';
-import { Card } from '../../components/ui/Card';
-import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Input, Select } from '../../components/ui/Input';
 import { Modal } from '../../components/ui/Modal';
@@ -27,18 +25,11 @@ import { sanitizeCoordinates, safeLngLatTuple, geocodeAddress } from '../../lib/
 import {
   MapPin,
   Search,
-  Layers,
-  Copy,
-  ExternalLink,
-  Plus,
-  Navigation,
-  Check,
   Pencil,
   Trash2,
   X,
   Building2,
   ArrowRight,
-  Info,
 } from '../../components/icons';
 
 type MapLayerType = 'streets' | 'satellite' | 'terrain';

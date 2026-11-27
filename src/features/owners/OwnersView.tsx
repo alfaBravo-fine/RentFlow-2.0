@@ -17,18 +17,11 @@ import { DestructiveConfirmationModal } from '../../components/ui/DestructiveCon
 import {
   Users,
   Plus,
-  Building2,
   Receipt,
-  Printer,
-  FileSpreadsheet,
-  Banknote,
-  Percent,
   Mail,
   Phone,
   Pencil,
   Trash2,
-  Calendar,
-  CheckCircle2,
 } from '../../components/icons';
 
 export const OwnersView: React.FC = () => {

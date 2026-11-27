@@ -33,7 +33,7 @@ export interface ExportResult {
   workbook?: ExcelJS.Workbook;
 }
 
-async function persistWorkbookBuffer(
+export async function persistWorkbookBuffer(
   buffer: ArrayBuffer | Uint8Array,
   fileName: string,
   customExportDir?: string

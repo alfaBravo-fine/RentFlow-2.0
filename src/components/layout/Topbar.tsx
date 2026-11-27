@@ -8,7 +8,6 @@ import {
   LogOut,
   RefreshCw,
   Copy,
-  Globe,
   Menu,
   Bell,
   Clock,
@@ -25,8 +24,6 @@ import {
   CloudOff,
   UserCheck,
 } from '../icons';
-import { listAllPacks, getCountryPack } from '../../countries/resolver';
-import { usePackStore } from '../../countries/usePack';
 import { useAuthStore } from '../../stores/authStore';
 import { useAppSettingsStore } from '../../stores/appSettingsStore';
 import { useDriveSync } from '../../hooks/useDriveSync';
@@ -57,12 +54,8 @@ export const Topbar: React.FC<TopbarProps> = ({ isDarkMode, onToggleTheme, onOpe
   const notificationsRef = useRef<HTMLDivElement>(null);
   const quickActionsRef = useRef<HTMLDivElement>(null);
 
-  const countryCode = usePackStore((s) => s.countryCode);
-  const setCountryCode = usePackStore((s) => s.setCountryCode);
   const { showToast } = useToast();
   const { syncState, lastSyncedAt, syncError, isRestoring } = useDriveSync();
-
-  const packs = listAllPacks();
 
   // Notification read & dismissal state persisted in centralized settings store
   const notificationsState = useAppSettingsStore((s) => s.notificationsState);
@@ -107,7 +100,7 @@ export const Topbar: React.FC<TopbarProps> = ({ isDarkMode, onToggleTheme, onOpe
   }, []);
 
   // Reactive DB subscription for active notifications
-  const [dbTick, setDbTick] = useState(0);
+  const [, setDbTick] = useState(0);
   useEffect(() => {
     return db.onWrite(() => {
       setDbTick((prev) => prev + 1);

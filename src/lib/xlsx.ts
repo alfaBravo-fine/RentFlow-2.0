@@ -1,9 +1,14 @@
 import ExcelJS from 'exceljs';
-import { saveAs } from 'file-saver';
+import { persistWorkbookBuffer } from './excelExport';
 
 export interface SheetData {
   name: string;
   data: Record<string, any>[];
+}
+
+export interface XlsxExportResult {
+  fileName: string;
+  savedPath?: string;
 }
 
 const THIN_GRAY_BORDER: Partial<ExcelJS.Borders> = {
@@ -14,9 +19,13 @@ const THIN_GRAY_BORDER: Partial<ExcelJS.Borders> = {
 };
 
 /**
- * Generates and downloads a professionally formatted multi-sheet Excel .xlsx file using ExcelJS.
+ * Generates and saves a professionally formatted multi-sheet Excel .xlsx file using ExcelJS.
+ * Writes directly to the configured desktop export folder in Tauri or triggers browser download fallback.
  */
-export async function exportToXLSX(fileName: string, sheets: SheetData[]) {
+export async function exportToXLSX(
+  fileName: string,
+  sheets: SheetData[]
+): Promise<XlsxExportResult> {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'RentFlow Property Management';
   workbook.created = new Date();
@@ -104,8 +113,17 @@ export async function exportToXLSX(fileName: string, sheets: SheetData[]) {
         };
         cell.border = THIN_GRAY_BORDER;
 
-        if (typeof val === 'number' && (key.toLowerCase().includes('amount') || key.toLowerCase().includes('rent') || key.toLowerCase().includes('fee') || key.toLowerCase().includes('subtotal') || key.toLowerCase().includes('total') || key.toLowerCase().includes('paid'))) {
-          cell.numFmt = '"Rs. "#,##0.00';
+        const lowerKey = key.toLowerCase();
+        if (
+          typeof val === 'number' &&
+          (lowerKey.includes('amount') ||
+            lowerKey.includes('rent') ||
+            lowerKey.includes('fee') ||
+            lowerKey.includes('subtotal') ||
+            lowerKey.includes('total') ||
+            lowerKey.includes('paid'))
+        ) {
+          cell.numFmt = '#,##0.00';
         }
       });
     });
@@ -126,8 +144,6 @@ export async function exportToXLSX(fileName: string, sheets: SheetData[]) {
 
   const finalName = fileName.endsWith('.xlsx') ? fileName : `${fileName}.xlsx`;
   const buffer = await workbook.xlsx.writeBuffer();
-  const blob = new Blob([buffer], {
-    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  });
-  saveAs(blob, finalName);
+  const savedPath = await persistWorkbookBuffer(buffer as ArrayBuffer, finalName);
+  return { fileName: finalName, savedPath };
 }

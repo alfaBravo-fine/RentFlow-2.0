@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { db } from '../../src/db/client';
-import { Property, Unit, Tenant, Lease, Invoice, Credit, Payment } from '../../src/db/schema';
-import { applyTenantCreditsToInvoice, generateFirstInvoice } from '../../src/lib/invoicing';
+import { Property, Unit, Tenant, Lease, Invoice, Credit } from '../../src/db/schema';
+import { applyTenantCreditsToInvoice } from '../../src/lib/invoicing';
 
 describe('Tenant Credits & Overpayment Logic Tests', () => {
   beforeEach(() => {

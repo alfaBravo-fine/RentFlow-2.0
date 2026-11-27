@@ -3,7 +3,7 @@ import { db } from '../../db/client';
 import { Vendor } from '../../db/schema';
 import { generateUUID } from '../../lib/uuid';
 import { useToast } from '../../components/toast/ToastContext';
-import { Card, CardHeader, CardTitle } from '../../components/ui/Card';
+import { Card } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Input, Select } from '../../components/ui/Input';

@@ -327,7 +327,7 @@ export const InvoicesView: React.FC = () => {
     });
   };
 
-  const handleExportRentRollXLSX = () => {
+  const handleExportRentRollXLSX = async () => {
     const data = invoices.map((inv) => {
       const lease = leases.find((l) => l.id === inv.lease_id);
       const tenant = tenants.find((t) => t.id === lease?.tenant_id);
@@ -350,10 +350,23 @@ export const InvoicesView: React.FC = () => {
       };
     });
 
-    exportToXLSX(`RentFlow_RentRoll_${pack.code}_${new Date().toISOString().slice(0, 10)}`, [
-      { name: 'Rent Roll & Invoices', data },
-    ]);
-    showToast({ type: 'success', message: 'Real Excel (.xlsx) Rent Roll downloaded!' });
+    try {
+      const result = await exportToXLSX(
+        `RentFlow_RentRoll_${pack.code}_${new Date().toISOString().slice(0, 10)}`,
+        [{ name: 'Rent Roll & Invoices', data }]
+      );
+      showToast({
+        type: 'success',
+        message: result.savedPath
+          ? `Rent Roll exported to ${result.savedPath}`
+          : `Rent Roll (${result.fileName}) downloaded!`,
+      });
+    } catch (err: any) {
+      showToast({
+        type: 'error',
+        message: err?.message || 'Could not export Rent Roll workbook.',
+      });
+    }
   };
 
   return (

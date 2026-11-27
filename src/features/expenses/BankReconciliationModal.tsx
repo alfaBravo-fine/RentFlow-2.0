@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { db } from '../../db/client';
-import { Tenant, Invoice, Lease, Property, Unit } from '../../db/schema';
+import { Tenant, Invoice, Lease } from '../../db/schema';
 import { usePack } from '../../countries/usePack';
 import { formatMoney, parseMajorToMinor } from '../../lib/money';
 import { useToast } from '../../components/toast/ToastContext';
@@ -8,14 +8,9 @@ import { Modal } from '../../components/ui/Modal';
 import { Button } from '../../components/ui/Button';
 import { Badge } from '../../components/ui/Badge';
 import {
-  RefreshCw,
   Upload,
   CheckCircle2,
-  AlertCircle,
   FileSpreadsheet,
-  ArrowRight,
-  ShieldCheck,
-  Search,
   Check,
 } from '../../components/icons';
 

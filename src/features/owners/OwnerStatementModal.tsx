@@ -5,7 +5,6 @@ import { formatMoney } from '../../lib/money';
 import { Modal } from '../../components/ui/Modal';
 import { Button } from '../../components/ui/Button';
 import { Printer } from '../../components/icons';
-import { handlePrint } from '../../lib/print';
 
 export interface OwnerStatementModalProps {
   isOpen: boolean;

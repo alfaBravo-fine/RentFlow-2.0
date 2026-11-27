@@ -14,16 +14,13 @@ import {
   Calendar as CalendarIcon,
   ChevronLeft,
   ChevronRight,
-  Clock,
   CheckCircle2,
   Circle,
   Plus,
   Trash2,
-  AlertCircle,
   FileText,
   Wrench,
   Receipt,
-  Users,
   CheckSquare,
 } from '../../components/icons';
 

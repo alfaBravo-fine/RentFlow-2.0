@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { listAllPacks, getCountryPack } from '../../countries/resolver';
-import { CountryPack } from '../../countries/types';
 import { usePackStore } from '../../countries/usePack';
 import { formatMoney } from '../../lib/money';
 import { useToast } from '../../components/toast/ToastContext';

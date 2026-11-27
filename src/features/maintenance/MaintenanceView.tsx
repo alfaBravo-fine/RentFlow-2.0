@@ -6,19 +6,15 @@ import { formatMoney, parseMajorToMinor } from '../../lib/money';
 import { useAppSettingsStore } from '../../stores/appSettingsStore';
 import { generateUUID } from '../../lib/uuid';
 import { useToast } from '../../components/toast/ToastContext';
-import { Card, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Input, Select } from '../../components/ui/Input';
 import { Modal } from '../../components/ui/Modal';
 import { emitTourAction } from '../../hooks/useAppTour';
 import {
-  Wrench,
   Plus,
   HardHat,
-  AlertCircle,
   Trash2,
-  Pencil,
   CheckCircle,
   Play,
   UserCheck,

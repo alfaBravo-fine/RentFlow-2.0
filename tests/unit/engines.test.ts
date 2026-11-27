@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { getCountryPack, resolvePack } from '../../src/countries/resolver';
-import { formatMoney, toMinor, toMajor } from '../../src/lib/money';
+import { getCountryPack } from '../../src/countries/resolver';
+import { formatMoney } from '../../src/lib/money';
 import { accrueDepositInterest } from '../../src/lib/interest';
 import { computeLateFee } from '../../src/lib/lateFee';
 import { convertArea } from '../../src/lib/units';

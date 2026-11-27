@@ -5,17 +5,14 @@ import {
   Building2,
   Users,
   Receipt,
-  FileText,
   Wrench,
-  HardHat,
   Calendar,
   Map,
   X,
   ArrowRight,
-  Plus,
 } from '../icons';
 import { db } from '../../db/client';
-import { Property, Unit, Tenant, Invoice, Lease, MaintenanceRequest } from '../../db/schema';
+import { Property, Unit, Tenant, Invoice, MaintenanceRequest } from '../../db/schema';
 
 export interface CommandPaletteProps {
   isOpen: boolean;

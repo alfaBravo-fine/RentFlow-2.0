@@ -4,7 +4,6 @@ import { CountryPack } from '../../countries/types';
 import { formatMoney } from '../../lib/money';
 import { formatDate } from '../../lib/format';
 import { formatInvoiceNumber } from '../../lib/formatNames';
-import { printReceiptDocument } from '../../lib/pdf';
 import { Printer, X, FileText, CheckCircle2 } from '../../components/icons';
 import { Button } from '../../components/ui/Button';
 import { handlePrint as triggerSystemPrint } from '../../lib/print';
@@ -26,7 +25,7 @@ export const PrintReceipt: React.FC<PrintReceiptProps> = ({
   property,
   unit,
   tenant,
-  lease,
+  lease: _lease,
   invoice,
   payment,
   pack,

@@ -9,7 +9,7 @@ import { Card, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
-import { Calculator, ArrowUpDown, Copy, Layers } from '../../components/icons';
+import { Calculator, ArrowUpDown, Copy } from '../../components/icons';
 import { useToast } from '../../components/toast/ToastContext';
 
 export const AreaCalculatorView: React.FC = () => {

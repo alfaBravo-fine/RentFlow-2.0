@@ -1,27 +1,20 @@
 import React, { useState } from 'react';
 import { db } from '../../db/client';
-import { Invoice, Expense, Unit, Property, Lease } from '../../db/schema';
+import { Invoice, Expense } from '../../db/schema';
 import { usePack } from '../../countries/usePack';
 import { formatMoney, minorToMajorNumber, getCurrencyMinorUnits } from '../../lib/money';
 import { exportToXLSX } from '../../lib/xlsx';
 import { useToast } from '../../components/toast/ToastContext';
 import { usePrint } from '../../components/print/PrintContext';
 import { AuditReportPrintable } from '../../components/print/AuditReportPrintable';
-import { Card, CardHeader, CardTitle } from '../../components/ui/Card';
+import { Card } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
 import {
-  BarChart3,
   Download,
-  FileText,
   Printer,
   FileSpreadsheet,
-  Shield,
-  TrendingUp,
-  Receipt,
-  Building2,
-  Calendar,
 } from '../../components/icons';
 
 export const ReportsView: React.FC = () => {
@@ -31,15 +24,34 @@ export const ReportsView: React.FC = () => {
 
   const invoices = db.getTable<Invoice>('invoices').filter((i) => !i.deleted_at);
   const expenses = db.getTable<Expense>('expenses').filter((e) => !e.deleted_at);
-  const properties = db.getTable<Property>('properties').filter((p) => !p.deleted_at);
-  const units = db.getTable<Unit>('units').filter((u) => !u.deleted_at);
 
-  const [selectedYear, setSelectedYear] = useState('2026');
+  const [selectedYear, setSelectedYear] = useState('All');
+
+  const availableYears = Array.from(
+    new Set([
+      String(new Date().getFullYear()),
+      ...invoices
+        .map((i) => (i.period_start || i.due_date || '').slice(0, 4))
+        .filter((y) => /^\d{4}$/.test(y)),
+      ...expenses
+        .map((e) => (e.expense_date || '').slice(0, 4))
+        .filter((y) => /^\d{4}$/.test(y)),
+    ])
+  ).sort((a, b) => b.localeCompare(a));
+
+  const yearFilteredInvoices =
+    selectedYear === 'All'
+      ? invoices
+      : invoices.filter((i) => (i.period_start || i.due_date || '').startsWith(selectedYear));
+  const yearFilteredExpenses =
+    selectedYear === 'All'
+      ? expenses
+      : expenses.filter((e) => (e.expense_date || '').startsWith(selectedYear));
 
   // Calculations strictly in minor units
-  const paidInvoices = invoices.filter((i) => i.status === 'paid');
+  const paidInvoices = yearFilteredInvoices.filter((i) => i.status === 'paid');
   const totalRentCollectedMinor = paidInvoices.reduce((acc, i) => acc + i.amount_paid_minor, 0);
-  const totalExpensesMinor = expenses.reduce((acc, e) => acc + e.amount_minor, 0);
+  const totalExpensesMinor = yearFilteredExpenses.reduce((acc, e) => acc + e.amount_minor, 0);
   const netOperatingIncomeMinor = totalRentCollectedMinor - totalExpensesMinor;
 
   // Statutory Tax & Withholding calculations
@@ -49,7 +61,7 @@ export const ReportsView: React.FC = () => {
     : 0;
 
   // Expenses grouped by category
-  const expensesByCategory = expenses.reduce<Record<string, number>>((acc, exp) => {
+  const expensesByCategory = yearFilteredExpenses.reduce<Record<string, number>>((acc, exp) => {
     acc[exp.category] = (acc[exp.category] || 0) + exp.amount_minor;
     return acc;
   }, {});
@@ -77,7 +89,7 @@ export const ReportsView: React.FC = () => {
     showToast({ type: 'success', message: 'P&L Statement exported to CSV' });
   };
 
-  const handleExportExcel = () => {
+  const handleExportExcel = async () => {
     const summaryData = [
       { Metric: 'Gross Rental Collections', Amount: minorToMajorNumber(totalRentCollectedMinor, pack), Currency: pack.currency.code },
       { Metric: 'Operating Expenses', Amount: minorToMajorNumber(totalExpensesMinor, pack), Currency: pack.currency.code },
@@ -91,12 +103,26 @@ export const ReportsView: React.FC = () => {
       Currency: pack.currency.code,
     }));
 
-    exportToXLSX(`RentFlow_Financial_Statement_${pack.code}_${new Date().toISOString().slice(0, 10)}`, [
-      { name: 'P&L Executive Summary', data: summaryData },
-      { name: 'Expense Breakdown', data: categoryData },
-    ]);
-
-    showToast({ type: 'success', message: 'Full Multi-Sheet Excel (.xlsx) statement generated!' });
+    try {
+      const result = await exportToXLSX(
+        `RentFlow_Financial_Statement_${pack.code}_${new Date().toISOString().slice(0, 10)}`,
+        [
+          { name: 'P&L Executive Summary', data: summaryData },
+          { name: 'Expense Breakdown', data: categoryData },
+        ]
+      );
+      showToast({
+        type: 'success',
+        message: result.savedPath
+          ? `Financial statement exported to ${result.savedPath}`
+          : `Financial statement (${result.fileName}) generated!`,
+      });
+    } catch (err: any) {
+      showToast({
+        type: 'error',
+        message: err?.message || 'Could not export Excel statement.',
+      });
+    }
   };
 
   const [isAuditModalOpen, setIsAuditModalOpen] = useState(false);
@@ -133,7 +159,20 @@ export const ReportsView: React.FC = () => {
             Jurisdiction: <strong>{pack.name}</strong> ({pack.code}) &bull; Currency: <strong>{pack.currency.code} ({pack.currency.symbol})</strong>
           </p>
         </div>
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <select
+            aria-label="Filter statements by year"
+            value={selectedYear}
+            onChange={(e) => setSelectedYear(e.target.value)}
+            className="h-9 px-3 rounded-xl border border-[var(--border-strong)] bg-[var(--bg-surface)] text-xs font-semibold text-[var(--text-primary)] cursor-pointer"
+          >
+            <option value="All">All Years</option>
+            {availableYears.map((yr) => (
+              <option key={yr} value={yr}>
+                CY {yr}
+              </option>
+            ))}
+          </select>
           <Button variant="outline" onClick={handleExportPnLCSV} className="gap-2">
             <Download className="w-4 h-4" />
             <span>Export CSV</span>
@@ -173,7 +212,7 @@ export const ReportsView: React.FC = () => {
             {formatMoney(totalExpensesMinor, pack)}
           </div>
           <span className="text-[11px] text-[var(--text-secondary)] block">
-            {expenses.length} Logged disbursements
+            {yearFilteredExpenses.length} Logged disbursements
           </span>
         </Card>
 
