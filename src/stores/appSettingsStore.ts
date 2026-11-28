@@ -10,13 +10,15 @@ export interface CalendarTodoTask {
   category: 'lease' | 'inspection' | 'billing' | 'maintenance' | 'general';
 }
 
+export type MapLayerType = 'streets' | 'satellite' | 'terrain' | 'buildings3d' | 'dark';
+
 export interface MapPositionState {
   lat: number;
   lng: number;
   center_lat: number;
   center_lng: number;
   zoom: number;
-  layer: 'streets' | 'satellite' | 'terrain';
+  layer: MapLayerType;
 }
 
 export interface NotificationItemState {
@@ -77,7 +79,7 @@ function createDefaultState(): AppSettingsData {
     mapPosition: null,
     autoSyncEnabled: true,
     launchAtStartup: false,
-    exportDestination: 'C:\\Users\\Documents\\RentFlowExports',
+    exportDestination: '',
     masterExcelFolder: '',
     masterExcelAutoSync: true,
     lastMasterExcelSync: null,
@@ -106,9 +108,14 @@ function loadInitialSettings(): AppSettingsData {
 
   const unified = safeReadJson<Partial<AppSettingsData>>(STORE_KEY);
   if (unified && typeof unified === 'object') {
+    const cleanExportDest =
+      unified.exportDestination === 'C:\\Users\\Documents\\RentFlowExports'
+        ? ''
+        : unified.exportDestination ?? defaults.exportDestination;
     return {
       ...defaults,
       ...unified,
+      exportDestination: cleanExportDest,
       notificationsState: unified.notificationsState || defaults.notificationsState,
       calendarTodos: Array.isArray(unified.calendarTodos) ? unified.calendarTodos : defaults.calendarTodos,
       leaseChecklists: unified.leaseChecklists || defaults.leaseChecklists,

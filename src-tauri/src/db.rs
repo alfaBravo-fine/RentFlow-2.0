@@ -2272,3 +2272,51 @@ pub async fn get_monthly_income_vs_expenses(
     Ok(result)
 }
 
+#[tauri::command]
+pub fn write_binary_file(file_path: String, content_base64: String) -> Result<usize, String> {
+    let trimmed = file_path.trim();
+    if trimmed.is_empty() {
+        return Err("Target file path cannot be empty.".to_string());
+    }
+    if trimmed.contains('\0') {
+        return Err("Security Violation: Invalid null character in file path.".to_string());
+    }
+
+    let path = PathBuf::from(trimmed);
+    for component in path.components() {
+        if matches!(component, std::path::Component::ParentDir) {
+            return Err("Security Violation: Path traversal ('..') is not permitted.".to_string());
+        }
+    }
+    if !path.is_absolute() {
+        return Err("Please provide an absolute file path.".to_string());
+    }
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create target directory {:?}: {}", parent, e))?;
+    }
+
+    let bytes = BASE64_STANDARD
+        .decode(content_base64.trim())
+        .map_err(|e| format!("Failed to decode binary file payload: {}", e))?;
+
+    if bytes.is_empty() {
+        return Err("Refusing to write an empty (0-byte) Excel workbook.".to_string());
+    }
+
+    let tmp_path = path.with_extension("xlsx.tmp");
+    if let Err(tmp_err) = fs::write(&tmp_path, &bytes) {
+        fs::write(&path, &bytes)
+            .map_err(|e| format!("Failed to write file {:?} ({}): {}", path, tmp_err, e))?;
+        return Ok(bytes.len());
+    }
+
+    if let Err(_rename_err) = fs::rename(&tmp_path, &path) {
+        let _ = fs::remove_file(&tmp_path);
+        fs::write(&path, &bytes)
+            .map_err(|e| format!("Failed to write file {:?}: {}", path, e))?;
+    }
+
+    Ok(bytes.len())
+}

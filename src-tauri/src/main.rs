@@ -17,7 +17,7 @@ use db::{
     record_deduction_transaction, record_payment_transaction, resolve_data_dir, save_setting,
     save_settings, set_data_path, update_expense, update_invoice, update_lease,
     update_maintenance_request, update_property, update_tenant, update_unit, update_vendor,
-    wipe_all_local_data, DatabaseManager,
+    wipe_all_local_data, write_binary_file, DatabaseManager,
 };
 use drive_sync::{
     drive_pull_backup, drive_push_backup, drive_push_change, get_backup_list,
@@ -219,6 +219,7 @@ fn main() {
             get_data_path,
             set_data_path,
             migrate_database,
+            write_binary_file,
             // Google OAuth Loopback Desktop Flow
             google_login,
             cancel_google_login,

@@ -34,7 +34,9 @@ import {
 import { backupToDrive } from '../../lib/googleDriveService';
 import {
   exportAllDataToExcel,
+  extractErrorMessage,
   MASTER_EXCEL_FILENAME,
+  resolveDefaultExportDir,
   syncMasterExcelFile,
   updateExistingExcel,
 } from '../../lib/excelExport';
@@ -293,7 +295,10 @@ export const SettingsData: React.FC = () => {
           targetFolder = picked.trim();
           handleSaveMasterExcelFolder(targetFolder);
         } else {
-          targetFolder = appDataPath || exportDestination || '';
+          targetFolder = await resolveDefaultExportDir();
+          if (!targetFolder) {
+            targetFolder = appDataPath || '';
+          }
         }
       }
 
@@ -308,10 +313,12 @@ export const SettingsData: React.FC = () => {
           ? `Updated "${result.savedPath}" (${result.totalRecords} records across ${result.sheetCount} tabs).`
           : `Generated "${result.fileName}" (${result.totalRecords} records across ${result.sheetCount} tabs).`,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
+      console.error('MASTER EXCEL EXPORT ERROR:', err);
+      const msg = extractErrorMessage(err, 'Could not update Live Excel Master File.');
       showToast({
         type: 'error',
-        message: err?.message || 'Could not update Live Excel Master File.',
+        message: `Export failed: ${msg}`,
       });
     } finally {
       setIsSyncingMasterExcel(false);
@@ -325,17 +332,20 @@ export const SettingsData: React.FC = () => {
         type: 'info',
         message: 'Generating Excel workbook (.xlsx)...',
       });
-      const result = await exportAllDataToExcel(pack, exportDestination);
+      const targetFolder = exportDestination.trim() || (await resolveDefaultExportDir()) || appDataPath || undefined;
+      const result = await exportAllDataToExcel(pack, targetFolder);
       showToast({
         type: 'success',
         message: result.savedPath
           ? `Exported ${result.totalRecords} records across ${result.sheetCount} worksheets to "${result.savedPath}".`
           : `Successfully exported ${result.totalRecords} records across ${result.sheetCount} worksheets to "${result.fileName}"!`,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
+      console.error('EXPORT ERROR:', err);
+      const msg = extractErrorMessage(err, 'Could not export Excel workbook.');
       showToast({
         type: 'error',
-        message: err.message || 'Could not export Excel workbook.',
+        message: `Export failed: ${msg}`,
       });
     } finally {
       setIsExportingExcel(false);
@@ -352,17 +362,20 @@ export const SettingsData: React.FC = () => {
         type: 'info',
         message: `Reading '${file.name}' and checking for existing records...`,
       });
-      const result = await updateExistingExcel(file, pack, exportDestination);
+      const targetFolder = exportDestination.trim() || (await resolveDefaultExportDir()) || appDataPath || undefined;
+      const result = await updateExistingExcel(file, pack, targetFolder);
       showToast({
         type: 'success',
         message: result.savedPath
           ? `Excel Update Complete! Appended ${result.totalRecords} new record(s) to "${result.savedPath}".`
           : `Excel Update Complete! Appended ${result.totalRecords} new record(s) across ${result.sheetCount} worksheets to "${result.fileName}".`,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
+      console.error('EXCEL UPDATE ERROR:', err);
+      const msg = extractErrorMessage(err, 'Could not update existing Excel file.');
       showToast({
         type: 'error',
-        message: err.message || 'Could not update existing Excel file.',
+        message: `Update failed: ${msg}`,
       });
     } finally {
       setIsUpdatingExcel(false);

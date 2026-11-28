@@ -11,7 +11,7 @@
   },
   "app": {
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; child-src 'self' blob:; img-src 'self' data: blob: https://*.tile.openstreetmap.org https://*.googleusercontent.com https://api.maptiler.com https://*.maptiler.com https://nominatim.openstreetmap.org https:; connect-src 'self' https://www.googleapis.com https://accounts.google.com https://oauth2.googleapis.com https://*.tile.openstreetmap.org https://api.maptiler.com https://*.maptiler.com https://nominatim.openstreetmap.org"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; child-src 'self' blob:; img-src 'self' data: blob: https://*.tile.openstreetmap.org https://*.googleusercontent.com https://api.maptiler.com https://*.maptiler.com https://tiles.openfreemap.org https://*.openfreemap.org https://server.arcgisonline.com https://*.basemaps.cartocdn.com https://*.tile.opentopomap.org https://s3.amazonaws.com https://nominatim.openstreetmap.org https:; connect-src 'self' https://www.googleapis.com https://accounts.google.com https://oauth2.googleapis.com https://*.tile.openstreetmap.org https://api.maptiler.com https://*.maptiler.com https://tiles.openfreemap.org https://*.openfreemap.org https://server.arcgisonline.com https://*.basemaps.cartocdn.com https://*.tile.opentopomap.org https://s3.amazonaws.com https://nominatim.openstreetmap.org"
     },
     "windows": [
       {

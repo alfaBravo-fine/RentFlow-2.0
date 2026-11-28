@@ -14,11 +14,25 @@
     "fs:default",
     "fs:allow-mkdir",
     "fs:allow-exists",
+    "fs:allow-write",
     "fs:allow-write-file",
+    "fs:allow-read",
     "fs:allow-read-file",
+    "fs:allow-rename",
+    "fs:allow-remove",
     {
       "identifier": "fs:scope",
-      "allow": [{ "path": "**" }]
+      "allow": [
+        { "path": "**" },
+        { "path": "**/*" },
+        { "path": "$DOWNLOAD/**" },
+        { "path": "$DOCUMENT/**" },
+        { "path": "$DESKTOP/**" },
+        { "path": "$HOME/**" },
+        { "path": "$APPDATA/**" },
+        { "path": "$LOCALDATA/**" },
+        { "path": "$DATA/**" }
+      ]
     }
   ]
 }

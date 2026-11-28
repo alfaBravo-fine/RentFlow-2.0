@@ -484,3 +484,25 @@ export async function tauriSetAutostartEnabled(enabled: boolean): Promise<boolea
 export async function tauriRestartApp(): Promise<void> {
   await invokeTauri<void>('restart_app');
 }
+
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  const chunkSize = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+export async function tauriWriteBinaryFile(
+  filePath: string,
+  bytes: Uint8Array
+): Promise<number> {
+  const contentBase64 = uint8ArrayToBase64(bytes);
+  return invokeTauri<number>('write_binary_file', {
+    filePath,
+    contentBase64,
+  });
+}
+

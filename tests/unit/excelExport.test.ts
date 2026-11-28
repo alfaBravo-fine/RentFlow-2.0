@@ -1,9 +1,15 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import ExcelJS from 'exceljs';
 import {
   exportToExcel,
   exportAllDataToExcel,
+  exportMasterExcel,
   updateExistingExcel,
   syncMasterExcelFile,
+  toCleanUint8Array,
+  hasValidXlsxZipHeader,
+  resolveSaveFilePath,
+  extractErrorMessage,
   MASTER_EXCEL_FILENAME,
 } from '../../src/lib/excelExport';
 import { db } from '../../src/db/client';
@@ -366,5 +372,60 @@ describe('ExcelJS Multi-Sheet Export Tests', () => {
     unitsWs.columns.forEach((col) => {
       expect(col.width).toBeGreaterThanOrEqual(12);
     });
+  });
+
+  it('toCleanUint8Array strips backing slab offsets and Buffer.toJSON and yields valid PK OOXML zip bytes', async () => {
+    const slab = new Uint8Array([0x00, 0x01, 0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x99]);
+    const slicedView = new Uint8Array(slab.buffer, 2, 6);
+    Object.assign(slicedView, { toJSON: () => ({ type: 'Buffer', data: [] }) });
+
+    const clean = toCleanUint8Array(slicedView);
+    expect(clean).toBeInstanceOf(Uint8Array);
+    expect(clean.constructor).toBe(Uint8Array);
+    expect(clean.byteOffset).toBe(0);
+    expect(clean.byteLength).toBe(6);
+    expect(clean.buffer.byteLength).toBe(6);
+    expect((clean as any).toJSON).toBeUndefined();
+    expect(hasValidXlsxZipHeader(clean)).toBe(true);
+    expect(hasValidXlsxZipHeader(new TextEncoder().encode('{"type":"Buffer"}'))).toBe(false);
+
+    const result = await syncMasterExcelFile({ pack: getCountryPack('PK'), silentDownload: true });
+    const rawBuffer = await result.workbook!.xlsx.writeBuffer();
+    const workbookBytes = toCleanUint8Array(rawBuffer);
+    expect(hasValidXlsxZipHeader(workbookBytes)).toBe(true);
+
+    const reloaded = new ExcelJS.Workbook();
+    await reloaded.xlsx.load(workbookBytes.buffer.slice(0, workbookBytes.byteLength) as ArrayBuffer);
+    expect(reloaded.getWorksheet('Properties')).toBeDefined();
+    expect(reloaded.getWorksheet('Units')).toBeDefined();
+  });
+
+  it('exportMasterExcel builds styled workbook and resolveSaveFilePath + extractErrorMessage handle Tauri paths and string errors', async () => {
+    const masterResult = await exportMasterExcel(undefined, undefined, {
+      pack: getCountryPack('PK'),
+      silentDownload: true,
+    });
+    expect(masterResult.fileName).toBe(MASTER_EXCEL_FILENAME);
+    expect(masterResult.sheetCount).toBe(9);
+    const bytes = toCleanUint8Array(await masterResult.workbook!.xlsx.writeBuffer());
+    expect(bytes.byteLength).toBeGreaterThan(0);
+    expect(hasValidXlsxZipHeader(bytes)).toBe(true);
+
+    const directFull = await resolveSaveFilePath(
+      'D:\\RentFlowData\\RentFlow_Master_Data.xlsx',
+      MASTER_EXCEL_FILENAME
+    );
+    expect(directFull.fullPath).toBe('D:\\RentFlowData\\RentFlow_Master_Data.xlsx');
+
+    const ignoredLegacy = await resolveSaveFilePath(
+      'C:\\Users\\Documents\\RentFlowExports',
+      MASTER_EXCEL_FILENAME
+    );
+    expect(ignoredLegacy.fullPath).toBe('');
+
+    expect(extractErrorMessage('forbidden path: D:\\test.xlsx')).toBe(
+      'forbidden path: D:\\test.xlsx'
+    );
+    expect(extractErrorMessage(new Error('Disk full'))).toBe('Disk full');
   });
 });

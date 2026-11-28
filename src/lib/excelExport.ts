@@ -1,10 +1,10 @@
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
-import { mkdir, writeFile } from '@tauri-apps/plugin-fs';
-import { join } from '@tauri-apps/api/path';
+import { mkdir, readFile, writeFile } from '@tauri-apps/plugin-fs';
+import { appDataDir, dirname, documentDir, downloadDir, join } from '@tauri-apps/api/path';
 import { db } from '../db/client';
 import { useAppSettingsStore } from '../stores/appSettingsStore';
-import { tauriGetDataPath } from './tauri/bridge';
+import { tauriGetAppDataPath, tauriGetDataPath, tauriWriteBinaryFile } from './tauri/bridge';
 import {
   Property,
   Unit,
@@ -37,30 +37,207 @@ export interface ExportResult {
   workbook?: ExcelJS.Workbook;
 }
 
+const XML_ILLEGAL_CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g;
+
+function sanitizeExcelCellValue(val: unknown): string | number | boolean {
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'number') {
+    return Number.isFinite(val) ? val : 0;
+  }
+  if (typeof val === 'boolean') return val;
+  if (val instanceof Date) return val.toISOString().split('T')[0];
+  return String(val).replace(XML_ILLEGAL_CONTROL_CHARS, '');
+}
+
+/**
+ * Copies any ArrayBuffer, Uint8Array, or Browserify Buffer returned by ExcelJS
+ * into a standalone standard Uint8Array (byteOffset === 0, no Buffer.toJSON()).
+ */
+export function toCleanUint8Array(buffer: ArrayBuffer | ArrayBufferView): Uint8Array {
+  const view = ArrayBuffer.isView(buffer)
+    ? new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength)
+    : new Uint8Array(buffer);
+  const clean = new Uint8Array(view.byteLength);
+  clean.set(view);
+  return clean;
+}
+
+export function hasValidXlsxZipHeader(bytes: Uint8Array): boolean {
+  return (
+    bytes.byteLength >= 4 &&
+    bytes[0] === 0x50 &&
+    bytes[1] === 0x4b &&
+    bytes[2] === 0x03 &&
+    bytes[3] === 0x04
+  );
+}
+
+const LEGACY_PLACEHOLDER_EXPORT_DIR = 'c:\\users\\documents\\rentflowexports';
+
+function isValidConfiguredPath(rawPath: string | undefined | null): rawPath is string {
+  if (typeof rawPath !== 'string') return false;
+  const trimmed = rawPath.trim();
+  if (!trimmed) return false;
+  return trimmed.toLowerCase() !== LEGACY_PLACEHOLDER_EXPORT_DIR;
+}
+
+export function extractErrorMessage(err: unknown, fallback = 'Unknown error'): string {
+  if (typeof err === 'string' && err.trim()) return err.trim();
+  if (err instanceof Error && err.message.trim()) return err.message.trim();
+  if (err && typeof err === 'object' && 'message' in err) {
+    const msg = String((err as { message?: unknown }).message ?? '').trim();
+    if (msg) return msg;
+  }
+  return fallback;
+}
+
+export async function getAppDataFallbackDir(): Promise<string> {
+  const isTauriDesktop =
+    typeof window !== 'undefined' && Boolean((window as any).__TAURI_INTERNALS__);
+  if (!isTauriDesktop) return '';
+
+  const fromApi = await appDataDir().catch(() => '');
+  if (isValidConfiguredPath(fromApi)) return fromApi.trim();
+
+  const fromBridge = await tauriGetAppDataPath().catch(() => '');
+  if (isValidConfiguredPath(fromBridge)) return fromBridge.trim();
+
+  const fromDataPath = await tauriGetDataPath().catch(() => '');
+  if (isValidConfiguredPath(fromDataPath)) return fromDataPath.trim();
+
+  return '';
+}
+
+export async function resolveDefaultExportDir(): Promise<string> {
+  const isTauriDesktop =
+    typeof window !== 'undefined' && Boolean((window as any).__TAURI_INTERNALS__);
+  if (!isTauriDesktop) return '';
+
+  const fromDownloads = await downloadDir().catch(() => '');
+  if (isValidConfiguredPath(fromDownloads)) return fromDownloads.trim();
+
+  const fromDocuments = await documentDir().catch(() => '');
+  if (isValidConfiguredPath(fromDocuments)) return fromDocuments.trim();
+
+  return getAppDataFallbackDir();
+}
+
+export async function resolveSaveFilePath(
+  targetPathOrDir: string | undefined,
+  fileName: string
+): Promise<{ fullPath: string; targetDir: string; usedFallbackDir: boolean }> {
+  const raw = isValidConfiguredPath(targetPathOrDir) ? targetPathOrDir.trim() : '';
+
+  if (raw && /\.xlsx$/i.test(raw)) {
+    const parent = await dirname(raw).catch(() => '');
+    return { fullPath: raw, targetDir: parent, usedFallbackDir: false };
+  }
+
+  let targetDir = raw;
+  let usedFallbackDir = false;
+  if (!targetDir) {
+    const configuredDest = useAppSettingsStore.getState().exportDestination;
+    targetDir = isValidConfiguredPath(configuredDest) ? configuredDest.trim() : '';
+  }
+  if (!targetDir) {
+    usedFallbackDir = true;
+    targetDir = await resolveDefaultExportDir();
+  }
+  if (!targetDir) {
+    return { fullPath: '', targetDir: '', usedFallbackDir };
+  }
+
+  const fullPath = await join(targetDir, fileName);
+  return { fullPath, targetDir, usedFallbackDir };
+}
+
+async function writeVerifiedXlsxToPath(
+  fullPath: string,
+  targetDir: string,
+  bytes: Uint8Array
+): Promise<void> {
+  let pluginFsError: unknown = null;
+  let writtenValidly = false;
+
+  try {
+    if (targetDir) {
+      await mkdir(targetDir, { recursive: true });
+    }
+    await writeFile(fullPath, bytes);
+    const verifyBytes = await readFile(fullPath);
+    if (
+      verifyBytes instanceof Uint8Array &&
+      verifyBytes.byteLength === bytes.byteLength &&
+      verifyBytes.byteLength > 0 &&
+      hasValidXlsxZipHeader(verifyBytes)
+    ) {
+      writtenValidly = true;
+    } else {
+      pluginFsError = new Error(
+        `File verification failed (${verifyBytes instanceof Uint8Array ? verifyBytes.byteLength : 0} bytes written instead of ${bytes.byteLength} bytes).`
+      );
+    }
+  } catch (err) {
+    pluginFsError = err;
+    writtenValidly = false;
+  }
+
+  if (!writtenValidly) {
+    try {
+      const writtenLen = await tauriWriteBinaryFile(fullPath, bytes);
+      if (!Number.isFinite(writtenLen) || writtenLen <= 0) {
+        throw new Error('Native file write returned 0 bytes.');
+      }
+    } catch (nativeErr) {
+      const detail = extractErrorMessage(nativeErr, extractErrorMessage(pluginFsError));
+      throw new Error(`Failed to write "${fullPath}": ${detail}`);
+    }
+  }
+}
+
 export async function persistWorkbookBuffer(
   buffer: ArrayBuffer | Uint8Array,
   fileName: string,
-  customExportDir?: string
+  customExportDirOrPath?: string,
+  options?: { silentDownload?: boolean }
 ): Promise<string | undefined> {
+  const bytes = toCleanUint8Array(buffer);
+  if (bytes.byteLength === 0 || !hasValidXlsxZipHeader(bytes)) {
+    throw new Error('Generated Excel buffer is empty or not a valid OOXML (.xlsx) archive.');
+  }
+
   const isTauriDesktop =
     typeof window !== 'undefined' && Boolean((window as any).__TAURI_INTERNALS__);
 
   if (isTauriDesktop) {
-    let targetDir = (customExportDir || useAppSettingsStore.getState().exportDestination || '').trim();
-    if (!targetDir) {
-      targetDir = await tauriGetDataPath().catch(() => '');
+    const { fullPath, targetDir, usedFallbackDir } = await resolveSaveFilePath(
+      customExportDirOrPath,
+      fileName
+    );
+    if (!fullPath) {
+      throw new Error('Could not resolve a writable folder for Excel export. Please select a destination folder.');
     }
-    if (targetDir) {
-      await mkdir(targetDir, { recursive: true });
-      const fullPath = await join(targetDir, fileName);
-      const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
-      await writeFile(fullPath, bytes);
+
+    try {
+      await writeVerifiedXlsxToPath(fullPath, targetDir, bytes);
       return fullPath;
+    } catch (primaryErr) {
+      if (usedFallbackDir) {
+        const appDataFallback = await getAppDataFallbackDir();
+        if (appDataFallback && appDataFallback !== targetDir) {
+          const fallbackPath = await join(appDataFallback, fileName);
+          await writeVerifiedXlsxToPath(fallbackPath, appDataFallback, bytes);
+          return fallbackPath;
+        }
+      }
+      console.error('EXPORT ERROR:', primaryErr);
+      throw primaryErr;
     }
   }
 
-  if (typeof window !== 'undefined') {
-    const blob = new Blob([buffer as BlobPart], {
+  if (!options?.silentDownload && typeof window !== 'undefined') {
+    const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+    const blob = new Blob([arrayBuffer], {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     });
     saveAs(blob, fileName);
@@ -376,9 +553,7 @@ export async function exportToExcel(
     // 3. Add Data Rows (Row 3+)
     rows.forEach((item: Record<string, any>) => {
       totalRecordsCount++;
-      const rowData = columns.map((col) =>
-        item[col.key] !== undefined && item[col.key] !== null ? item[col.key] : ''
-      );
+      const rowData = columns.map((col) => sanitizeExcelCellValue(item[col.key]));
       const row = sheet.addRow(rowData);
       row.height = 20;
 
@@ -538,9 +713,7 @@ export async function updateExistingExcel(
       // Sheet missing: create new sheet with title banner and headers, add all rows
       sheet = createSheetWithHeader(sheetName, columns);
       rows.forEach((item: Record<string, any>) => {
-        const rowData = columns.map((col) =>
-          item[col.key] !== undefined && item[col.key] !== null ? item[col.key] : ''
-        );
+        const rowData = columns.map((col) => sanitizeExcelCellValue(item[col.key]));
         const row = sheet!.addRow(rowData);
         styleDataRow(row, columns);
         totalAppendedRecords++;
@@ -595,9 +768,7 @@ export async function updateExistingExcel(
         }
 
         // Append new record
-        const rowData = columns.map((col) =>
-          item[col.key] !== undefined && item[col.key] !== null ? item[col.key] : ''
-        );
+        const rowData = columns.map((col) => sanitizeExcelCellValue(item[col.key]));
         const row = sheet!.addRow(rowData);
         styleDataRow(row, columns);
 
@@ -639,14 +810,133 @@ export async function updateExistingExcel(
 // Alias for backward compatibility
 export const exportAllDataToExcel = exportToExcel;
 
+export type MasterExportDataset = Record<string, { columns: ColumnDef[]; rows: Record<string, any>[] }>;
+
 export interface MasterExcelSyncOptions {
   pack?: CountryPack;
   targetFolder?: string;
+  savePath?: string;
+  data?: MasterExportDataset;
   /** When true (e.g. background browser/test calls), avoid triggering browser file download popup */
   silentDownload?: boolean;
 }
 
 let masterSyncInFlight: Promise<ExportResult> | null = null;
+
+/**
+ * Generates and writes a styled multi-tab Excel master workbook (`RentFlow_Master_Data.xlsx`)
+ * using ExcelJS, converting the workbook buffer cleanly to a `Uint8Array` and saving via
+ * Tauri's filesystem plugin (with Downloads fallback when no folder is set).
+ */
+export async function exportMasterExcel(
+  data?: MasterExportDataset,
+  savePath?: string,
+  options?: { pack?: CountryPack; silentDownload?: boolean }
+): Promise<ExportResult> {
+  const activePack = options?.pack || getCountryPack(usePackStore.getState().countryCode || 'US');
+  const currencySymbol = activePack?.currency?.symbol || '$';
+  const currencyNumFmt = `"${currencySymbol} "#,##0.00`;
+
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'RentFlow Property Management';
+  workbook.created = new Date();
+  workbook.modified = new Date();
+
+  const exportData = data || getExportData(activePack);
+  let totalRecordsCount = 0;
+
+  Object.entries(exportData).forEach(([sheetName, { columns, rows }]) => {
+    const sheet = workbook.addWorksheet(sheetName, {
+      views: [{ state: 'frozen', ySplit: 1, showGridLines: true }],
+    });
+
+    // 1. Row 1: Styled Indigo Header (#4F46E5 fill, white bold text, thin borders)
+    const headerRow = sheet.addRow(columns.map((c) => c.header));
+    headerRow.height = 26;
+    headerRow.eachCell({ includeEmpty: true }, (cell) => {
+      cell.font = { name: 'Calibri', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F46E5' } };
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        bottom: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        right: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+      };
+    });
+
+    // 2. Data Rows (Row 2+)
+    rows.forEach((item: Record<string, any>) => {
+      totalRecordsCount++;
+      const rowData = columns.map((col) => sanitizeExcelCellValue(item[col.key]));
+      const row = sheet.addRow(rowData);
+      row.height = 20;
+
+      row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+        const colDef = columns[colNumber - 1];
+        cell.font = { name: 'Calibri', size: 10, color: { argb: 'FF0F172A' } };
+        cell.alignment = {
+          vertical: 'middle',
+          horizontal: colDef?.isCurrency || typeof cell.value === 'number' ? 'right' : 'left',
+        };
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FFD3D3D3' } },
+          bottom: { style: 'thin', color: { argb: 'FFD3D3D3' } },
+          left: { style: 'thin', color: { argb: 'FFD3D3D3' } },
+          right: { style: 'thin', color: { argb: 'FFD3D3D3' } },
+        };
+
+        if (colDef?.isCurrency && typeof cell.value === 'number' && Number.isFinite(cell.value)) {
+          cell.numFmt = currencyNumFmt;
+        }
+      });
+    });
+
+    // 3. Auto-adjust column widths based on longest text
+    sheet.columns.forEach((column, idx) => {
+      let maxLength = columns[idx]?.header?.length || 10;
+      column.eachCell?.({ includeEmpty: true }, (cell) => {
+        const val = cell.value;
+        const str =
+          val === null || val === undefined
+            ? ''
+            : typeof val === 'object' && 'result' in val
+            ? String((val as any).result ?? '')
+            : String(val);
+        if (str.length > maxLength) maxLength = str.length;
+      });
+      column.width = Math.max(12, Math.min(maxLength + 4, 60));
+    });
+  });
+
+  const rawBuffer = await workbook.xlsx.writeBuffer();
+  const uint8Array = toCleanUint8Array(rawBuffer);
+
+  const settingsState = useAppSettingsStore.getState();
+  const resolvedTarget = (
+    savePath ||
+    settingsState.masterExcelFolder ||
+    settingsState.exportDestination ||
+    ''
+  ).trim();
+
+  const savedPath = await persistWorkbookBuffer(
+    uint8Array,
+    MASTER_EXCEL_FILENAME,
+    isValidConfiguredPath(resolvedTarget) ? resolvedTarget : undefined,
+    { silentDownload: options?.silentDownload }
+  );
+
+  settingsState.setLastMasterExcelSync(new Date().toISOString());
+
+  return {
+    fileName: MASTER_EXCEL_FILENAME,
+    savedPath,
+    totalRecords: totalRecordsCount,
+    sheetCount: workbook.worksheets.length,
+    workbook,
+  };
+}
 
 /**
  * Generates and atomically overwrites `RentFlow_Master_Data.xlsx` with all portfolio tabs.
@@ -663,124 +953,10 @@ export async function syncMasterExcelFile(
         ? { pack: optionsOrPack, targetFolder: customMasterDir }
         : { ...(optionsOrPack || {}), targetFolder: customMasterDir ?? optionsOrPack?.targetFolder };
 
-    const activePack = opts.pack || getCountryPack(usePackStore.getState().countryCode || 'US');
-    const currencySymbol = activePack?.currency?.symbol || '$';
-    const currencyNumFmt = `"${currencySymbol} "#,##0.00`;
-
-    const workbook = new ExcelJS.Workbook();
-    workbook.creator = 'RentFlow Property Management';
-    workbook.created = new Date();
-    workbook.modified = new Date();
-
-    const exportData = getExportData(activePack);
-    let totalRecordsCount = 0;
-
-    Object.entries(exportData).forEach(([sheetName, { columns, rows }]) => {
-      const sheet = workbook.addWorksheet(sheetName, {
-        views: [{ state: 'frozen', ySplit: 1, showGridLines: true }],
-      });
-
-      // 1. Row 1: Styled Indigo Header (#4F46E5 fill, white bold text, thin borders)
-      const headerRow = sheet.addRow(columns.map((c) => c.header));
-      headerRow.height = 26;
-      headerRow.eachCell({ includeEmpty: true }, (cell) => {
-        cell.font = { name: 'Calibri', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F46E5' } };
-        cell.alignment = { vertical: 'middle', horizontal: 'center' };
-        cell.border = {
-          top: { style: 'thin', color: { argb: 'FFCBD5E1' } },
-          bottom: { style: 'thin', color: { argb: 'FFCBD5E1' } },
-          left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
-          right: { style: 'thin', color: { argb: 'FFCBD5E1' } },
-        };
-      });
-
-      // 2. Data Rows (Row 2+)
-      rows.forEach((item: Record<string, any>) => {
-        totalRecordsCount++;
-        const rowData = columns.map((col) =>
-          item[col.key] !== undefined && item[col.key] !== null ? item[col.key] : ''
-        );
-        const row = sheet.addRow(rowData);
-        row.height = 20;
-
-        row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-          const colDef = columns[colNumber - 1];
-          cell.font = { name: 'Calibri', size: 10, color: { argb: 'FF0F172A' } };
-          cell.alignment = {
-            vertical: 'middle',
-            horizontal: colDef?.isCurrency || typeof cell.value === 'number' ? 'right' : 'left',
-          };
-          cell.border = {
-            top: { style: 'thin', color: { argb: 'FFD3D3D3' } },
-            bottom: { style: 'thin', color: { argb: 'FFD3D3D3' } },
-            left: { style: 'thin', color: { argb: 'FFD3D3D3' } },
-            right: { style: 'thin', color: { argb: 'FFD3D3D3' } },
-          };
-
-          if (colDef?.isCurrency && typeof cell.value === 'number') {
-            cell.numFmt = currencyNumFmt;
-          }
-        });
-      });
-
-      // 3. Auto-adjust column widths based on longest text
-      sheet.columns.forEach((column, idx) => {
-        let maxLength = columns[idx]?.header?.length || 10;
-        column.eachCell?.({ includeEmpty: true }, (cell) => {
-          const val = cell.value;
-          const str =
-            val === null || val === undefined
-              ? ''
-              : typeof val === 'object' && 'result' in val
-              ? String((val as any).result ?? '')
-              : String(val);
-          if (str.length > maxLength) maxLength = str.length;
-        });
-        column.width = Math.max(12, Math.min(maxLength + 4, 60));
-      });
+    return exportMasterExcel(opts.data, opts.savePath || opts.targetFolder, {
+      pack: opts.pack,
+      silentDownload: opts.silentDownload,
     });
-
-    const buffer = await workbook.xlsx.writeBuffer();
-    const isTauriDesktop =
-      typeof window !== 'undefined' && Boolean((window as any).__TAURI_INTERNALS__);
-
-    let savedPath: string | undefined;
-    const settingsState = useAppSettingsStore.getState();
-    const configuredDir = (
-      opts.targetFolder ||
-      settingsState.masterExcelFolder ||
-      ''
-    ).trim();
-
-    if (isTauriDesktop) {
-      let targetDir = configuredDir || settingsState.exportDestination?.trim() || '';
-      if (!targetDir) {
-        targetDir = await tauriGetDataPath().catch(() => '');
-      }
-      if (targetDir) {
-        await mkdir(targetDir, { recursive: true });
-        const fullPath = await join(targetDir, MASTER_EXCEL_FILENAME);
-        const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
-        await writeFile(fullPath, bytes);
-        savedPath = fullPath;
-      }
-    } else if (!opts.silentDownload && typeof window !== 'undefined') {
-      const blob = new Blob([buffer as BlobPart], {
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      });
-      saveAs(blob, MASTER_EXCEL_FILENAME);
-    }
-
-    settingsState.setLastMasterExcelSync(new Date().toISOString());
-
-    return {
-      fileName: MASTER_EXCEL_FILENAME,
-      savedPath,
-      totalRecords: totalRecordsCount,
-      sheetCount: workbook.worksheets.length,
-      workbook,
-    };
   };
 
   if (masterSyncInFlight) {
