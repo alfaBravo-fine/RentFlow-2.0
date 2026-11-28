@@ -252,9 +252,21 @@ export const MapView: React.FC = () => {
 
     if (isMountedRef.current) setIsReverseGeocoding(true);
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
       const res = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`,
+        {
+          signal: controller.signal,
+          headers: {
+            Accept: 'application/json',
+          },
+        }
       );
+      clearTimeout(timeoutId);
+      if (!res.ok) {
+        throw new Error(`Reverse geocoding error: ${res.status}`);
+      }
       const data = await res.json();
       if (!isMountedRef.current) return;
       if (data && data.address) {
@@ -605,23 +617,55 @@ export const MapView: React.FC = () => {
 
   const handleSearchLocation = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!searchQuery.trim()) return;
+    const trimmedQuery = searchQuery.trim();
+    if (!trimmedQuery) return;
+
+    // Support direct "lat, lng" search even offline
+    const coordMatch = trimmedQuery.match(/^\s*([-+]?\d{1,3}(?:\.\d+)?)\s*,\s*([-+]?\d{1,3}(?:\.\d+)?)\s*$/);
+    if (coordMatch) {
+      const tuple = safeLngLatTuple(coordMatch[1], coordMatch[2]);
+      if (tuple) {
+        mapRef.current?.flyTo({ center: tuple, zoom: 14, speed: 1.4 });
+        showToast({ type: 'info', message: `Flew to ${tuple[1].toFixed(4)}, ${tuple[0].toFixed(4)}` });
+        return;
+      }
+    }
 
     if (isMountedRef.current) setIsSearching(true);
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
       const res = await fetch(
         `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
-          searchQuery
-        )}&limit=1`
+          trimmedQuery
+        )}&limit=1`,
+        {
+          signal: controller.signal,
+          headers: {
+            Accept: 'application/json',
+          },
+        }
       );
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        if (isMountedRef.current) {
+          showToast({
+            type: 'error',
+            message: 'Location search service is temporarily unavailable. Please try again.',
+          });
+        }
+        return;
+      }
+
       const data = await res.json();
       if (!isMountedRef.current) return;
-      if (data && data.length > 0) {
+      if (Array.isArray(data) && data.length > 0) {
         const item = data[0];
         const tuple = safeLngLatTuple(item.lat, item.lon);
         if (tuple) {
           mapRef.current?.flyTo({ center: tuple, zoom: 13, speed: 1.4 });
-          showToast({ type: 'info', message: `Flew to ${item.display_name.split(',')[0]}` });
+          showToast({ type: 'info', message: `Flew to ${String(item.display_name || trimmedQuery).split(',')[0]}` });
         } else {
           showToast({ type: 'error', message: 'Location found, but coordinates are out of bounds.' });
         }
