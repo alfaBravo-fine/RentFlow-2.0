@@ -1,6 +1,3 @@
-// Prevents additional console window on Windows in release
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-
 mod auth;
 mod db;
 mod drive_sync;
@@ -52,7 +49,6 @@ fn main() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_oauth::init())
         .plugin(tauri_plugin_store::Builder::new().build())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             if let Some(main_window) = app.get_webview_window("main") {
                 if let Some(icon) = app.default_window_icon() {
@@ -62,30 +58,89 @@ fn main() {
                 }
             }
 
-            if let Err(e) = (|| -> Result<(), Box<dyn std::error::Error>> {
-                eprintln!("[RentFlow Tauri] Initializing SQLite DB & Store...");
-                let data_dir = resolve_data_dir(app.handle())
-                    .map_err(|e| format!("Failed to resolve data directory: {}", e))?;
+            eprintln!("[RentFlow Tauri] Initializing SQLite DB & Store...");
 
-                fs::create_dir_all(&data_dir)
-                    .map_err(|e| format!("Failed to create data directory: {}", e))?;
+            let default_app_data_dir = match app.path().app_data_dir() {
+                Ok(dir) => dir,
+                Err(err) => {
+                    eprintln!("FATAL SETUP ERROR: Failed to resolve app_data_dir: {}", err);
+                    return Err(Box::new(err));
+                }
+            };
 
-                let db_path = data_dir.join("rentflow.db");
-                eprintln!("[RentFlow Tauri] Opening database at {:?}...", db_path);
-                let db_manager = DatabaseManager::new(db_path)
-                    .map_err(|e| format!("Failed to initialize database: {}", e))?;
-
-                let auth_state = AuthState::default();
-                hydrate_auth_state(app.handle(), &auth_state);
-
-                app.manage(db_manager);
-                app.manage(auth_state);
-
-                eprintln!("[RentFlow Tauri] SQLite database & Store OAuth state initialized.");
-                Ok(())
-            })() {
-                eprintln!("FATAL SETUP ERROR: {}", e);
+            if let Err(err) = fs::create_dir_all(&default_app_data_dir) {
+                eprintln!(
+                    "FATAL SETUP ERROR: Failed to create app_data_dir {:?}: {}",
+                    default_app_data_dir, err
+                );
+                return Err(Box::new(err));
             }
+
+            let data_dir = match resolve_data_dir(app.handle()) {
+                Ok(dir) => dir,
+                Err(err) => {
+                    eprintln!(
+                        "[RentFlow Tauri] Warning: failed to resolve custom data directory ({}); falling back to app_data_dir {:?}",
+                        err, default_app_data_dir
+                    );
+                    default_app_data_dir.clone()
+                }
+            };
+
+            if let Err(err) = fs::create_dir_all(&data_dir) {
+                eprintln!(
+                    "[RentFlow Tauri] Warning: failed to create data directory {:?} ({}); falling back to app_data_dir {:?}",
+                    data_dir, err, default_app_data_dir
+                );
+            }
+
+            let primary_db_path = if data_dir.exists() {
+                data_dir.join("rentflow.db")
+            } else {
+                default_app_data_dir.join("rentflow.db")
+            };
+
+            eprintln!("[RentFlow Tauri] Opening database at {:?}...", primary_db_path);
+            let db_manager = match DatabaseManager::new(primary_db_path.clone()) {
+                Ok(mgr) => mgr,
+                Err(primary_err) => {
+                    eprintln!(
+                        "[RentFlow Tauri] Error opening primary database {:?}: {}",
+                        primary_db_path, primary_err
+                    );
+                    let fallback_db_path = default_app_data_dir.join("rentflow.db");
+                    if fallback_db_path != primary_db_path {
+                        eprintln!(
+                            "[RentFlow Tauri] Attempting fallback database at {:?}...",
+                            fallback_db_path
+                        );
+                        match DatabaseManager::new(fallback_db_path) {
+                            Ok(mgr) => mgr,
+                            Err(fallback_err) => {
+                                eprintln!(
+                                    "FATAL SETUP ERROR: Failed to initialize SQLite database: {}",
+                                    fallback_err
+                                );
+                                return Err(fallback_err.into());
+                            }
+                        }
+                    } else {
+                        eprintln!(
+                            "FATAL SETUP ERROR: Failed to initialize SQLite database: {}",
+                            primary_err
+                        );
+                        return Err(primary_err.into());
+                    }
+                }
+            };
+
+            let auth_state = AuthState::default();
+            hydrate_auth_state(app.handle(), &auth_state);
+
+            app.manage(db_manager);
+            app.manage(auth_state);
+
+            eprintln!("[RentFlow Tauri] SQLite database & Store OAuth state initialized.");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

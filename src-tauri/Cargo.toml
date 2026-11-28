@@ -1,6 +1,6 @@
 [package]
 name = "rentflow-desktop"
-version = "2.0.0"
+version = "2.0.1"
 description = "RentFlow - Production-ready offline-first desktop property and rental management app"
 authors = ["RentFlow Team"]
 edition = "2021"
@@ -15,7 +15,6 @@ tauri-plugin-dialog = "2.0.0"
 tauri-plugin-fs = "2.0.0"
 tauri-plugin-oauth = "2.0.0"
 tauri-plugin-store = "2.0.0"
-tauri-plugin-updater = "2.0.0"
 rusqlite = { version = "0.31", features = ["bundled"] }
 reqwest = { version = "0.12", features = ["json", "multipart"] }
 serde = { version = "1.0", features = ["derive"] }

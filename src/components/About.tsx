@@ -20,7 +20,7 @@ export const About: React.FC = () => {
               RentFlow Desktop
             </h2>
             <p className="text-xs font-mono tabular-nums text-[var(--text-secondary)]">
-              Version 2.0.0
+              Version 2.0.1
             </p>
           </div>
         </div>

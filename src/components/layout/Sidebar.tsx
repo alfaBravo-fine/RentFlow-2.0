@@ -1,7 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { motion } from 'motion/react';
-import { Logo } from '../Logo';
 import { useAppSettingsStore } from '../../stores/appSettingsStore';
 import { useAuthStore } from '../../stores/authStore';
 import {
@@ -109,7 +108,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpenMobile, onCloseMobile })
               transition={{ type: 'spring', stiffness: 420, damping: 24 }}
               className="shrink-0 flex items-center justify-center rounded-lg shadow-xs cursor-pointer"
             >
-              <Logo size={32} />
+              <img
+                src="/assets/logo.png"
+                alt="RentFlow Logo"
+                className="w-8 h-8 rounded-lg object-contain"
+              />
             </motion.div>
             <div
               className={`flex flex-col transition-opacity duration-150 ${
